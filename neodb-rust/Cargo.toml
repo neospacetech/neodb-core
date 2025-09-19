@@ -1,0 +1,32 @@
+[package]
+name = "neodb-rust"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+description = "Core Rust library for NeoDB graph database"
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+
+# Local workspace dependencies
+neodb-storage = { path = "../neodb-storage" }
+neodb-cache = { path = "../neodb-cache" }
+neodb-traversal = { path = "../neodb-traversal" }
+
+[dev-dependencies]
+criterion.workspace = true
+
+# Commented out until we create the benchmark
+# [[bench]]
+# name = "graph_operations"
+# harness = false

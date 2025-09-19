@@ -1,0 +1,17 @@
+[package]
+name = "neodb-storage"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+description = "Storage engine for NeoDB graph database"
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+rocksdb.workspace = true
+memmap2.workspace = true
+tokio.workspace = true
