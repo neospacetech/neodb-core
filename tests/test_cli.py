@@ -82,9 +82,9 @@ class TransactionShellTests(unittest.TestCase):
     @patch("builtins.print")
     def test_shell_exits_on_quit_or_eof(self, _output):
         with patch("builtins.input", return_value="quit"):
-            main()
+            main([])
         with patch("builtins.input", side_effect=EOFError):
-            main()
+            main([])
 
 
 if __name__ == "__main__":

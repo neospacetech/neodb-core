@@ -3,8 +3,12 @@
 This module provides a command-line interface for interacting with the NeoDB engine.
 """
 
+import argparse
 import json
+import sys
 import uuid
+from collections.abc import Sequence
+from pathlib import Path
 
 from engine import NeoDBEngine
 from neoql.ast import (
@@ -18,6 +22,8 @@ from neoql.parser import (
     statement_to_query,
 )
 from neoql.selection import Selection
+
+from .source import StatementBuffer, split_script
 
 HELP_TEXT = {
     "general": """
@@ -144,10 +150,19 @@ def parse_cli_command(cmd: str):
     return statement_to_query(parse_statement(cmd))
 
 
-def print_diagnostic(error: DiagnosticError) -> None:
+def print_diagnostic(error: DiagnosticError, *, filename: str | None = None) -> None:
     """Render a public diagnostic for humans and JSON consumers."""
-    print(f"Error [{error.code}]: {error}")
-    print(json.dumps(error.to_dict(), sort_keys=True, default=str))
+    prefix = ""
+    if filename is not None:
+        if error.span is not None:
+            prefix = f"{filename}:{error.span.start.line}:{error.span.start.column}: "
+        else:
+            prefix = f"{filename}: "
+    print(f"{prefix}Error [{error.code}]: {error}")
+    payload = error.to_dict()
+    if filename is not None:
+        payload["filename"] = filename
+    print(json.dumps(payload, sort_keys=True, default=str))
 
 
 def execute_cli_command(engine: NeoDBEngine, cmd: str, transaction_space=None):
@@ -246,20 +261,64 @@ def run(engine: NeoDBEngine, json_query):
         return None
 
 
-def main():
-    """Run the interactive NeoDB shell."""
-    engine = NeoDBEngine()
+def run_script(path: str | Path, engine: NeoDBEngine | None = None) -> int:
+    """Execute a NeoQL source file and return a deterministic exit status."""
+    script_path = Path(path)
+    try:
+        source = script_path.read_text(encoding="utf-8")
+    except OSError as error:
+        print(f"{script_path}: {error}", file=sys.stderr)
+        return 2
+
+    runtime = engine or NeoDBEngine()
+    for statement in split_script(source):
+        located_source = "\n" * (statement.start_line - 1) + statement.source
+        try:
+            query = statement_to_query(parse_statement(located_source))
+            result = runtime.execute_query(query)
+            if isinstance(result, Selection):
+                result = result.consume()
+            print(json.dumps(result, sort_keys=True, default=str))
+        except DiagnosticError as error:
+            print_diagnostic(error, filename=str(script_path))
+            return 1
+    return 0
+
+
+def run_repl(engine: NeoDBEngine | None = None) -> None:
+    """Run the interactive shell with delimiter-aware continuation input."""
+    runtime = engine or NeoDBEngine()
     transactions = {"active": ""}
+    buffer = StatementBuffer()
     while True:
         try:
-            inp = input("neodb> ").strip()
-        except (EOFError, KeyboardInterrupt):
+            inp = input("... " if buffer.pending else "neodb> ")
+        except EOFError:
+            print()
+            for statement in buffer.finish():
+                print(
+                    f"Output: {execute_cli_command(runtime, statement, transactions)}"
+                )
+            break
+        except KeyboardInterrupt:
             print()
             break
-        if inp.lower() in ("exit", "quit"):
+        if not buffer.pending and inp.strip().lower() in ("exit", "quit"):
             break
-        print(f"Output: {execute_cli_command(engine, inp, transactions)}")
+        for statement in buffer.feed(inp):
+            print(f"Output: {execute_cli_command(runtime, statement, transactions)}")
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Run a script or start the interactive NeoDB shell."""
+    argument_parser = argparse.ArgumentParser(prog="neodb")
+    argument_parser.add_argument("script", nargs="?", help="NeoQL source file")
+    arguments = argument_parser.parse_args(argv)
+    if arguments.script:
+        return run_script(arguments.script)
+    run_repl()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

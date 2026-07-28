@@ -18,6 +18,16 @@ python -m pip install -e .
 neodb
 ```
 
+Execute a NeoQL script with `neodb path/to/script.neoql`. The shell shows
+`... ` while delimiters or string literals remain open. Scripts may contain
+comments, blank lines, top-level semicolon-separated statements, or one
+complete statement per line. Multiline statements remain buffered until
+complete.
+
+Script execution returns `0` on success, `1` for a NeoQL diagnostic, and `2`
+when the source file cannot be read. Diagnostics include the source filename
+and global line and column.
+
 Example session:
 
 ```neoql
