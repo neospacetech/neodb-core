@@ -93,9 +93,7 @@ class SelectionInsertionTests(unittest.TestCase):
         self.assertEqual(len(self.engine.datasets["users"].rows), 4)
 
     def test_self_insert_constraint_failure_is_atomic(self):
-        self.session.execute(
-            "create dataset keyed(table{id(int, pk), name(str(20))})"
-        )
+        self.session.execute("create dataset keyed(table{id(int, pk), name(str(20))})")
         self.session.execute('add {id=1, name="A"} into keyed')
         with self.assertRaises(ConstraintViolation):
             self.session.execute("add keyed() into keyed")
@@ -131,9 +129,7 @@ class SelectionReferenceTests(unittest.TestCase):
     def setUp(self):
         self.engine = NeoDBEngine()
         self.session = NeoQLSession(self.engine)
-        self.session.execute(
-            "create dataset users(table{id(int, pk), name(str(20))})"
-        )
+        self.session.execute("create dataset users(table{id(int, pk), name(str(20))})")
         self.session.execute('add {id=1, name="A"}, {id=2, name="B"} into users')
         self.session.execute(
             "create dataset projects("
@@ -155,15 +151,11 @@ class SelectionReferenceTests(unittest.TestCase):
                 "add {id=2, owner=users({id=99}), members=[]} into projects"
             )
         with self.assertRaises(AmbiguousReferenceError):
-            self.session.execute(
-                "add {id=2, owner=users(), members=[]} into projects"
-            )
+            self.session.execute("add {id=2, owner=users(), members=[]} into projects")
         self.assertEqual(len(self.engine.datasets["projects"].rows), 1)
 
     def test_collection_selection_expands_in_stable_order(self):
-        self.session.execute(
-            "selected = users().sort(id)"
-        )
+        self.session.execute("selected = users().sort(id)")
         self.session.execute(
             "add {id=1, owner=users({id=1}), members=(selected)} into projects"
         )
