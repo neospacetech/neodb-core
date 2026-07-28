@@ -1238,7 +1238,17 @@ def statement_to_query(
                 )
             fields = [field.name for field in operation.fields]
             query["select"] = fields
-            pipeline.append({"operation": "project", "fields": fields})
+            projection_item: dict[str, Any] = {
+                "operation": "project",
+                "fields": fields,
+            }
+            if any(field.children for field in operation.fields):
+                projection = [
+                    _projection_field_to_query(field) for field in operation.fields
+                ]
+                query["projection"] = projection
+                projection_item["projection"] = projection
+            pipeline.append(projection_item)
             continue
         if isinstance(operation, WhereOperation):
             if grouping:
@@ -1494,3 +1504,11 @@ def statement_to_query(
     if extended_pipeline:
         query["pipeline"] = pipeline
     return query
+
+
+def _projection_field_to_query(field: ProjectionField) -> dict[str, Any]:
+    return {
+        "name": field.name,
+        "children": [_projection_field_to_query(child) for child in field.children],
+        "span": field.span,
+    }

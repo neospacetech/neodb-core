@@ -212,7 +212,30 @@ class NeoDBEngine:
             raise DatasetNotFoundError(query["dataset"])
         prepared = self._resolve_query_references(dataset, query)
         self._validate_mutation_references(dataset, prepared)
+        if prepared.get("action") == "select":
+            prepared = dict(prepared)
+            prepared["_reference_resolver"] = self._resolve_projection_reference
         return dataset.query(prepared)
+
+    def _resolve_projection_reference(
+        self,
+        reference: ReferenceValue,
+    ) -> Mapping[str, Any]:
+        target = self.datasets.get(reference.dataset)
+        if target is None:
+            raise DatasetNotFoundError(reference.dataset)
+        matches = _find_reference_matches(target, reference.identity)
+        if not matches:
+            raise MissingReferenceError(
+                reference.dataset,
+                dict(reference.identity),
+            )
+        if len(matches) > 1:
+            raise AmbiguousReferenceError(
+                reference.dataset,
+                dict(reference.identity),
+            )
+        return dict(matches[0])
 
     def _insert_selection(self, query: Mapping[str, Any]) -> Any:
         dataset_name = query.get("dataset")

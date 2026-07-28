@@ -112,9 +112,23 @@ class TableDataset(BaseDataset):
             if isinstance(node, (FilterPlan, IndexLookupPlan)):
                 validate_predicate(node.predicate, self.schema)
             elif isinstance(node, ProjectionPlan):
-                self._validate_query_fields(
-                    field for field in node.fields if field not in computed_fields
-                )
+                for projected_field in node.fields:
+                    if projected_field in computed_fields:
+                        continue
+                    try:
+                        self._validate_query_fields((projected_field,))
+                    except UnknownFieldError as error:
+                        projected = next(
+                            (
+                                item
+                                for item in node.tree
+                                if item.name == projected_field
+                            ),
+                            None,
+                        )
+                        if projected is not None and projected.span is not None:
+                            error.with_source(projected.span)
+                        raise
             elif isinstance(node, OrderPlan):
                 self._validate_query_fields(
                     field

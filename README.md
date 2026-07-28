@@ -344,6 +344,15 @@ users().(
 )
 ```
 
+Nested projection executes recursively for embedded objects, typed references,
+and reference collections. Only requested children are returned; referenced
+records remain stored as identities and are expanded lazily when the Selection
+is consumed. `null` remains `null`, list and tuple order is preserved, and set
+results use deterministic order. Nested projections compose with filters,
+ordering, traversal, selection algebra, offsets, and limits. Unknown nested
+fields and attempts to project through scalar values produce structured,
+source-located diagnostics.
+
 ## 10. Records
 
 Record literals use `=` for assignment, never `:`:

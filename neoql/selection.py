@@ -1,6 +1,6 @@
 """Immutable lazy selections and executable logical plans."""
 
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from functools import partial
@@ -12,6 +12,7 @@ from typing import Any, TypeAlias, overload
 from .ast import Span
 from .errors import EngineError, InvalidTraversalError, UnknownFieldError
 from .predicates import evaluate_predicate
+from .references import ReferenceValue
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,8 +21,16 @@ class FilterPlan:
 
 
 @dataclass(frozen=True, slots=True)
+class ProjectionFieldPlan:
+    name: str
+    children: tuple["ProjectionFieldPlan", ...] = ()
+    span: Span | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ProjectionPlan:
     fields: tuple[str, ...]
+    tree: tuple[ProjectionFieldPlan, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +120,7 @@ class Selection:
 
     _source: Any
     _plan: tuple[PlanNode, ...] = ()
+    _reference_resolver: Callable[[Any], Mapping[str, Any]] | None = None
 
     @property
     def dataset(self) -> str:
@@ -122,7 +132,7 @@ class Selection:
 
     @classmethod
     def from_query(cls, source: Any, query: Mapping[str, Any]) -> "Selection":
-        return cls(source).refine(query)
+        return cls(source, (), query.get("_reference_resolver")).refine(query)
 
     def refine(self, query: Mapping[str, Any]) -> "Selection":
         """Append the selection clauses in a compiled query to this lazy plan."""
@@ -137,7 +147,10 @@ class Selection:
                 if operation == "where":
                     selection = selection.where(item["predicate"])
                 elif operation == "project":
-                    selection = selection.project(*item["fields"])
+                    selection = selection.project(
+                        *item["fields"],
+                        tree=item.get("projection"),
+                    )
                 elif operation == "order":
                     fields = item.get("fields", [item.get("field")])
                     selection = selection.order(
@@ -184,7 +197,10 @@ class Selection:
             )
         fields = query.get("select")
         if fields:
-            selection = selection.project(*fields)
+            selection = selection.project(
+                *fields,
+                tree=query.get("projection"),
+            )
         order_by = query.get("order_by")
         if order_by:
             selection = selection.order(
@@ -201,8 +217,17 @@ class Selection:
     def where(self, predicate: Mapping[str, Any]) -> "Selection":
         return self._append(FilterPlan(_freeze_mapping(predicate)))
 
-    def project(self, *fields: str) -> "Selection":
-        return self._append(ProjectionPlan(tuple(fields)))
+    def project(
+        self,
+        *fields: str,
+        tree: Sequence[Mapping[str, Any] | ProjectionFieldPlan] | None = None,
+    ) -> "Selection":
+        projection = (
+            tuple(_projection_field_plan(field) for field in tree)
+            if tree is not None
+            else tuple(ProjectionFieldPlan(field) for field in fields)
+        )
+        return self._append(ProjectionPlan(tuple(fields), projection))
 
     def order(self, *fields: tuple[str, str]) -> "Selection":
         normalized = tuple((field, direction.lower()) for field, direction in fields)
@@ -384,10 +409,7 @@ class Selection:
                     if evaluate_predicate(record, node.predicate)
                 ]
             elif isinstance(node, ProjectionPlan):
-                result = [
-                    {field: record.get(field) for field in node.fields}
-                    for record in result
-                ]
+                result = [self._project_record(record, node) for record in result]
             elif isinstance(node, OrderPlan):
                 for field, direction in reversed(node.fields):
                     result.sort(
@@ -426,7 +448,9 @@ class Selection:
         from .optimizer import optimize_plan
 
         return Selection(
-            self._source, optimize_plan(self._plan, self._source).optimized
+            self._source,
+            optimize_plan(self._plan, self._source).optimized,
+            self._reference_resolver,
         )
 
     def explain(self) -> dict[str, Any]:
@@ -436,7 +460,79 @@ class Selection:
         return {"dataset": self.dataset, **result.to_dict()}
 
     def _append(self, node: PlanNode) -> "Selection":
-        return Selection(self._source, (*self._plan, node))
+        return Selection(
+            self._source,
+            (*self._plan, node),
+            self._reference_resolver,
+        )
+
+    def _project_record(
+        self,
+        record: Mapping[str, Any],
+        node: ProjectionPlan,
+    ) -> dict[str, Any]:
+        tree = node.tree or tuple(ProjectionFieldPlan(field) for field in node.fields)
+        return {
+            field.name: self._project_field(record, field, self.dataset)
+            for field in tree
+        }
+
+    def _project_field(
+        self,
+        record: Mapping[str, Any],
+        field: ProjectionFieldPlan,
+        path: str,
+    ) -> Any:
+        if field.name not in record:
+            error = UnknownFieldError(path, field.name)
+            if field.span is not None:
+                error.with_source(field.span)
+            raise error
+        value = record[field.name]
+        if not field.children:
+            return value
+        return self._project_nested(value, field, f"{path}.{field.name}")
+
+    def _project_nested(
+        self,
+        value: Any,
+        field: ProjectionFieldPlan,
+        path: str,
+    ) -> Any:
+        if value is None:
+            return None
+        if _is_reference(value):
+            if self._reference_resolver is None:
+                raise EngineError(
+                    "reference_expansion_unavailable",
+                    f"Cannot expand reference field '{path}' without an engine",
+                    phase="plan",
+                    details={"dataset": self.dataset, "field": path},
+                )
+            value = self._reference_resolver(value)
+        if isinstance(value, Mapping):
+            return {
+                child.name: self._project_field(value, child, path)
+                for child in field.children
+            }
+        if isinstance(value, (list, tuple)):
+            projected = [self._project_nested(item, field, path) for item in value]
+            return tuple(projected) if isinstance(value, tuple) else projected
+        if isinstance(value, (set, frozenset)):
+            return [
+                self._project_nested(item, field, path)
+                for item in sorted(value, key=repr)
+            ]
+        error = EngineError(
+            "type_mismatch",
+            "Nested projection requires an object, reference, or "
+            f"collection at '{path}'",
+            phase="plan",
+            details={"dataset": self.dataset, "field": path},
+        )
+        if field.span is not None:
+            error.with_source(field.span)
+        raise error
 
     def _algebra(
         self,
@@ -636,6 +732,22 @@ class Selection:
 
     def __repr__(self) -> str:
         return f"Selection(dataset={self.dataset!r}, plan={self._plan!r})"
+
+
+def _projection_field_plan(
+    value: Mapping[str, Any] | ProjectionFieldPlan,
+) -> ProjectionFieldPlan:
+    if isinstance(value, ProjectionFieldPlan):
+        return value
+    return ProjectionFieldPlan(
+        str(value["name"]),
+        tuple(_projection_field_plan(child) for child in value.get("children", ())),
+        value.get("span"),
+    )
+
+
+def _is_reference(value: Any) -> bool:
+    return isinstance(value, ReferenceValue)
 
 
 @dataclass(frozen=True, slots=True)

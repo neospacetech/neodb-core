@@ -11,6 +11,7 @@ from .selection import (
     LimitPlan,
     OffsetPlan,
     PlanNode,
+    ProjectionFieldPlan,
     ProjectionPlan,
     ReversePlan,
     SimilarityPlan,
@@ -184,6 +185,23 @@ def _plan_to_dict(node: PlanNode) -> dict[str, Any]:
 
 
 def _serialize(value: Any) -> Any:
+    if isinstance(value, ProjectionFieldPlan):
+        payload: dict[str, Any] = {
+            "name": value.name,
+            "children": [_serialize(child) for child in value.children],
+        }
+        if value.span is not None:
+            payload["location"] = {
+                "start": {
+                    "line": value.span.start.line,
+                    "column": value.span.start.column,
+                },
+                "end": {
+                    "line": value.span.end.line,
+                    "column": value.span.end.column,
+                },
+            }
+        return payload
     if isinstance(value, Mapping):
         return {key: _serialize(item) for key, item in value.items()}
     if isinstance(value, tuple):
