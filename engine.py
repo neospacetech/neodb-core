@@ -4,6 +4,7 @@ from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -26,6 +27,7 @@ from neoql.errors import (
 from neoql.predicates import validate_predicate
 from neoql.references import ReferenceValue
 from neoql.types import TypeDescriptor, TypeKind, cast_value
+from storage import StorageManager
 
 
 @dataclass(slots=True)
@@ -37,9 +39,15 @@ class TransactionFrame:
 class NeoDBEngine:
     """A NeoDB engine for managing datasets."""
 
-    def __init__(self):
-        self._committed_datasets: dict[str, Any] = {}
+    def __init__(self, storage_path: str | Path | None = None):
         self._transactions: list[TransactionFrame] = []
+        self._storage = (
+            StorageManager(storage_path) if storage_path is not None else None
+        )
+        self._committed_datasets: dict[str, Any] = (
+            self._storage.load() if self._storage is not None else {}
+        )
+        self._validate_loaded_state()
 
     @property
     def datasets(self) -> dict[str, Any]:
@@ -65,10 +73,13 @@ class NeoDBEngine:
 
     def commit_transaction(self, transaction_id: str | None = None) -> str:
         frame = self._require_transaction(transaction_id)
-        self._transactions.pop()
-        if self._transactions:
+        if len(self._transactions) > 1:
+            self._transactions.pop()
             self._transactions[-1].datasets = frame.datasets
         else:
+            if self._storage is not None:
+                self._storage.persist(frame.datasets, frame.id)
+            self._transactions.pop()
             self._committed_datasets = frame.datasets
         return frame.id
 
@@ -135,6 +146,7 @@ class NeoDBEngine:
             dataset = DocumentDataset(name=name, schema=schema)
         elif dtype == "vector":
             dataset = DocumentDataset(name=name, schema=schema)
+            dataset.storage_type = "vector"
         elif dtype in ("kv", "kvs"):
             dataset = KVSDataset(name)
         else:
@@ -285,6 +297,49 @@ class NeoDBEngine:
                     raise DatasetNotFoundError(target_name)
                 if isinstance(target, TableDataset) and not _identity_fields(target):
                     raise AmbiguousReferenceError(target_name, "no identity constraint")
+
+    def _validate_loaded_state(self) -> None:
+        for dataset in self.datasets.values():
+            if isinstance(dataset, TableDataset):
+                try:
+                    self._validate_reference_targets(dataset)
+                except EngineError as error:
+                    raise EngineError(
+                        "storage_corruption",
+                        "Persisted reference schema is invalid",
+                        details={"dataset": dataset.name, "cause": error.code},
+                    ) from error
+                for record in dataset.rows:
+                    for reference in _iter_references(record):
+                        target = self.datasets.get(reference.dataset)
+                        if target is None:
+                            raise EngineError(
+                                "storage_corruption",
+                                "Persisted reference target is missing",
+                                details={"dataset": reference.dataset},
+                            )
+                        try:
+                            self._validate_reference_value(target, reference)
+                        except EngineError as error:
+                            raise EngineError(
+                                "storage_corruption",
+                                "Persisted reference is invalid",
+                                details={
+                                    "dataset": reference.dataset,
+                                    "cause": error.code,
+                                },
+                            ) from error
+            elif isinstance(dataset, GraphDataset):
+                for edge in dataset.edges:
+                    if (
+                        edge.get("source") not in dataset.nodes
+                        or edge.get("target") not in dataset.nodes
+                    ):
+                        raise EngineError(
+                            "storage_corruption",
+                            "Persisted graph link has a missing endpoint",
+                            details={"dataset": dataset.name, "link": edge.get("id")},
+                        )
 
     def _validate_mutation_references(
         self,

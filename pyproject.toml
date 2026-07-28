@@ -40,7 +40,7 @@ Issues = "https://github.com/neospacetech/neodb-core/issues"
 Roadmap = "https://github.com/orgs/neospacetech/projects/3"
 
 [tool.setuptools]
-py-modules = ["engine"]
+py-modules = ["engine", "storage"]
 
 [tool.setuptools.packages.find]
 include = ["cli*", "datasets*", "neoql*"]
@@ -65,7 +65,7 @@ warn_unused_configs = true
 
 [tool.coverage.run]
 branch = true
-source = ["cli", "datasets", "engine", "neoql"]
+source = ["cli", "datasets", "engine", "neoql", "storage"]
 
 [tool.coverage.report]
 exclude_also = [

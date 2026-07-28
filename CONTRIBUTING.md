@@ -20,7 +20,7 @@ Run the same gates used by CI:
 ```bash
 ruff format --check .
 ruff check .
-mypy cli datasets neoql engine.py
+mypy cli datasets neoql engine.py storage.py
 coverage run -m unittest discover -v
 coverage report
 python -m build

@@ -111,5 +111,5 @@ class GraphDataset(BaseDataset):
                 break
         return result
 
-
-# Helper for filter logic
+    # Helper for filter logic
+    storage_type = "graph"

@@ -27,12 +27,16 @@ class TableDataset(BaseDataset):
         BaseDataset (BaseDataset): The base dataset class.
     """
 
+    storage_type = "table"
+
     def __init__(self, name: str, schema: Mapping[str, Any] | None = None):
         self.name = name
         self.schema = DatasetSchema.from_mapping(name, schema)
         self.columns = list(self.schema.fields)
         self.rows: list[dict[str, Any]] = []
         self.index_metadata = self.schema.indexes
+        self._indexes: dict[str, dict[Any, list[int]]] = {}
+        self._rebuild_indexes()
 
     def insert(self, row: Mapping[str, Any]) -> dict[str, Any]:
         inserted = self.insert_many([row])
@@ -45,6 +49,7 @@ class TableDataset(BaseDataset):
         candidates = [*self.rows, *normalized]
         self.schema.validate_records(candidates)
         self.rows.extend(normalized)
+        self._rebuild_indexes()
         return [dict(row) for row in normalized]
 
     def update(
@@ -61,6 +66,7 @@ class TableDataset(BaseDataset):
         self.schema.validate_records(candidates)
         updated = sum(matched)
         self.rows = candidates
+        self._rebuild_indexes()
         return updated
 
     def query(self, neoql):
@@ -194,4 +200,33 @@ class TableDataset(BaseDataset):
         deleted = len(self.rows) - len(remaining)
         self.schema.validate_records(remaining)
         self.rows = remaining
+        self._rebuild_indexes()
         return deleted
+
+    def _rebuild_indexes(self) -> None:
+        indexes: dict[str, dict[Any, list[int]]] = {}
+        for metadata in self.index_metadata:
+            if not metadata.indexed or metadata.vector:
+                continue
+            values: dict[Any, list[int]] = {}
+            for position, record in enumerate(self.rows):
+                value = record.get(metadata.field)
+                try:
+                    hash(value)
+                except TypeError:
+                    continue
+                values.setdefault(value, []).append(position)
+            indexes[metadata.field] = values
+        self._indexes = indexes
+
+    def _index_lookup(self, plan: IndexLookupPlan) -> list[Mapping[str, Any]]:
+        positions = self._indexes.get(plan.field, {}).get(plan.value)
+        if positions is None:
+            return []
+        return [self.rows[position] for position in positions]
+
+    def index_snapshot(self) -> dict[str, dict[Any, list[int]]]:
+        return {
+            field: {value: list(positions) for value, positions in values.items()}
+            for field, values in self._indexes.items()
+        }

@@ -50,7 +50,7 @@ Install the development toolchain and run all local quality gates:
 python -m pip install -e ".[dev]"
 ruff format --check .
 ruff check .
-mypy cli datasets neoql engine.py
+mypy cli datasets neoql engine.py storage.py
 coverage run -m unittest discover -v
 coverage report
 python -m build
@@ -600,6 +600,30 @@ Selections bind to the dataset snapshot visible when they are created. This
 keeps selections created before `begin` isolated from staged writes. A
 `transaction{...}` block and an engine `batch` are implicit atomic
 transactions, so a failed constraint cannot leave earlier mutations applied.
+
+### Durable engine storage
+
+Passing a storage directory enables durable commits and automatic recovery:
+
+```python
+engine = NeoDBEngine("./data")
+```
+
+The directory contains a versioned, checksummed `snapshot.json` and a
+checksummed `wal.jsonl`. An outer transaction commit fsyncs its complete state
+to the WAL as the commit point, then atomically checkpoints the snapshot and
+publishes the state in memory. A checkpoint failure leaves the durable WAL
+authoritative. Startup replays its latest valid record and retries the
+checkpoint. A partial final WAL
+record is discarded, while checksum, version, schema, reference, graph-link,
+and index inconsistencies raise structured `storage_corruption` or
+`storage_version` diagnostics.
+
+Primary-key, unique, and secondary equality indexes are stored in the snapshot,
+rebuilt and cross-checked during recovery, and used through the optimizer's
+index lookup plan. Nested transactions remain in memory until their outermost
+commit. Engines created without a storage directory retain the in-memory
+behavior.
 
 ## 27. Functions
 

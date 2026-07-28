@@ -56,3 +56,5 @@ class KVSDataset(BaseDataset):
 
     def _selection_records(self):
         return [{"key": key, "value": value} for key, value in self.store.items()]
+
+    storage_type = "kv"
