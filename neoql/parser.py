@@ -588,6 +588,38 @@ def statement_to_query(statement: Statement) -> dict[str, Any]:
                     "",
                 )
             query[operation.name] = operation.arguments[0].value
+        elif operation.name in {"distance", "similarity"}:
+            if any(key in query for key in {"select", "order_by", "limit", "offset"}):
+                raise NeoQLSyntaxError(
+                    f"{operation.name}() must precede projection, ordering, "
+                    "and pagination",
+                    operation.span,
+                    "",
+                )
+            if (
+                len(operation.arguments) not in {2, 3}
+                or not isinstance(operation.arguments[0], str)
+                or not isinstance(operation.arguments[1], ListLiteral)
+                or (
+                    len(operation.arguments) == 3
+                    and not isinstance(operation.arguments[2], str)
+                )
+            ):
+                raise NeoQLSyntaxError(
+                    f"{operation.name}() expects a field, vector, and optional metric",
+                    operation.span,
+                    "",
+                )
+            metric = (
+                operation.arguments[2]
+                if len(operation.arguments) == 3
+                else ("euclidean" if operation.name == "distance" else "cosine")
+            )
+            query["similarity"] = {
+                "field": operation.arguments[0],
+                "vector": _value_to_python(operation.arguments[1]),
+                "metric": metric,
+            }
         elif operation.name == "group":
             if (
                 grouping

@@ -1,3 +1,5 @@
+from neoql.errors import EngineError
+
 from .base import BaseDataset
 
 
@@ -26,6 +28,20 @@ class KVSDataset(BaseDataset):
         return list(self.store.keys())
 
     def insert(self, obj):
+        if not isinstance(obj, dict) or set(obj) != {"key", "value"}:
+            raise EngineError(
+                "invalid_record",
+                "Key/value records require exactly 'key' and 'value'",
+                details={"dataset": self.name},
+            )
+        try:
+            hash(obj["key"])
+        except TypeError as error:
+            raise EngineError(
+                "invalid_record",
+                "Key/value keys must be hashable",
+                details={"dataset": self.name},
+            ) from error
         self.set(obj["key"], obj["value"])
 
     def query(self, neoql):

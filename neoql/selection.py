@@ -4,6 +4,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from functools import partial
+from math import sqrt
 from statistics import median, pstdev
 from types import MappingProxyType
 from typing import Any, TypeAlias, overload
@@ -63,6 +64,13 @@ class AlgebraPlan:
     other: "Selection"
 
 
+@dataclass(frozen=True, slots=True)
+class SimilarityPlan:
+    field: str
+    vector: tuple[float, ...]
+    metric: str
+
+
 PlanNode: TypeAlias = (
     FilterPlan
     | ProjectionPlan
@@ -74,6 +82,7 @@ PlanNode: TypeAlias = (
     | FlattenPlan
     | ExpandPlan
     | AlgebraPlan
+    | SimilarityPlan
 )
 
 
@@ -98,6 +107,13 @@ class Selection:
         predicate = query.get("filter")
         if predicate:
             selection = selection.where(predicate)
+        similarity = query.get("similarity")
+        if similarity:
+            selection = selection.similarity(
+                similarity["field"],
+                similarity["vector"],
+                metric=similarity.get("metric", "cosine"),
+            )
         fields = query.get("select")
         if fields:
             selection = selection.project(*fields)
@@ -148,6 +164,48 @@ class Selection:
 
     def expand(self, field: str) -> "Selection":
         return self._append(ExpandPlan(field))
+
+    def similarity(
+        self,
+        field: str,
+        vector: Sequence[int | float | Decimal],
+        *,
+        metric: str = "cosine",
+    ) -> "Selection":
+        normalized_metric = metric.lower()
+        if normalized_metric not in {"cosine", "euclidean"}:
+            raise EngineError(
+                "invalid_vector_metric",
+                f"Unknown vector metric '{metric}'",
+                phase="plan",
+                details={"metric": metric},
+            )
+        if not vector or any(
+            isinstance(value, bool) or not isinstance(value, (int, float, Decimal))
+            for value in vector
+        ):
+            raise EngineError(
+                "invalid_vector",
+                "Similarity query requires a non-empty numeric vector",
+                phase="plan",
+                details={"field": field},
+            )
+        return self._append(
+            SimilarityPlan(
+                field,
+                tuple(float(value) for value in vector),
+                normalized_metric,
+            )
+        )
+
+    def distance(
+        self,
+        field: str,
+        vector: Sequence[int | float | Decimal],
+        *,
+        metric: str = "euclidean",
+    ) -> "Selection":
+        return self.similarity(field, vector, metric=metric)
 
     def group(self, field: str) -> "GroupedSelection":
         return GroupedSelection(self, field)
@@ -243,6 +301,8 @@ class Selection:
                 result = self._flatten(result, node.field)
             elif isinstance(node, ExpandPlan):
                 result = self._expand(result, node.field)
+            elif isinstance(node, SimilarityPlan):
+                result = self._similarity(result, node)
             else:
                 result = self._apply_algebra(result, node)
         return result
@@ -353,6 +413,49 @@ class Selection:
                 )
             expanded.append({**parent, **value})
         return expanded
+
+    def _similarity(
+        self,
+        records: list[dict[str, Any]],
+        node: SimilarityPlan,
+    ) -> list[dict[str, Any]]:
+        ranked = []
+        for record in records:
+            if node.field not in record:
+                raise UnknownFieldError(self.dataset, node.field)
+            raw_vector = record[node.field]
+            if raw_vector is None:
+                continue
+            if not isinstance(raw_vector, (list, tuple)) or len(raw_vector) != len(
+                node.vector
+            ):
+                raise EngineError(
+                    "vector_dimension",
+                    f"Vector field '{node.field}' has incompatible dimensions",
+                    details={
+                        "dataset": self.dataset,
+                        "field": node.field,
+                        "expected": len(node.vector),
+                    },
+                )
+            try:
+                vector = tuple(float(value) for value in raw_vector)
+            except (TypeError, ValueError) as error:
+                raise EngineError(
+                    "invalid_vector",
+                    f"Vector field '{node.field}' contains non-numeric values",
+                    details={"dataset": self.dataset, "field": node.field},
+                ) from error
+            distance, similarity = _vector_score(vector, node.vector, node.metric)
+            ranked.append(
+                {
+                    **record,
+                    "_distance": distance,
+                    "_similarity": similarity,
+                }
+            )
+        ranked.sort(key=lambda record: record["_distance"])
+        return ranked
 
     def __add__(self, other: "Selection") -> "Selection":
         return self.union(other)
@@ -539,6 +642,28 @@ def _group_records(
             groups[key] = (value, [])
         groups[key][1].append(record)
     return list(groups.values())
+
+
+def _vector_score(
+    left: tuple[float, ...],
+    right: tuple[float, ...],
+    metric: str,
+) -> tuple[float, float]:
+    if metric == "euclidean":
+        distance = sqrt(sum((a - b) ** 2 for a, b in zip(left, right, strict=True)))
+        return distance, 1.0 / (1.0 + distance)
+    left_norm = sqrt(sum(value * value for value in left))
+    right_norm = sqrt(sum(value * value for value in right))
+    if left_norm == 0 or right_norm == 0:
+        raise EngineError(
+            "invalid_vector",
+            "Cosine similarity is undefined for zero vectors",
+            details={"metric": metric},
+        )
+    similarity = sum(a * b for a, b in zip(left, right, strict=True)) / (
+        left_norm * right_norm
+    )
+    return 1.0 - similarity, similarity
 
 
 def _freeze_mapping(value: Mapping[str, Any]) -> Mapping[str, Any]:

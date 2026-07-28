@@ -58,6 +58,7 @@ from .selection import (
     ProjectionPlan,
     ReversePlan,
     Selection,
+    SimilarityPlan,
     UniquePlan,
 )
 from .types import (
@@ -112,6 +113,7 @@ __all__ = [
     "SelectionStatement",
     "SchemaDefinitionError",
     "Selection",
+    "SimilarityPlan",
     "Statement",
     "Token",
     "TokenKind",

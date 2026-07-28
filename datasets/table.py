@@ -11,6 +11,7 @@ from neoql.selection import (
     OrderPlan,
     ProjectionPlan,
     Selection,
+    SimilarityPlan,
     UniquePlan,
 )
 from neoql.types import TypeKind
@@ -99,15 +100,24 @@ class TableDataset(BaseDataset):
         return self.rows.copy()
 
     def _validate_selection(self, selection: Selection) -> None:
+        computed_fields: set[str] = set()
         for node in selection.plan:
             if isinstance(node, FilterPlan):
                 validate_predicate(node.predicate, self.schema)
             elif isinstance(node, ProjectionPlan):
-                self._validate_query_fields(node.fields)
+                self._validate_query_fields(
+                    field for field in node.fields if field not in computed_fields
+                )
             elif isinstance(node, OrderPlan):
-                self._validate_query_fields(field for field, _direction in node.fields)
+                self._validate_query_fields(
+                    field
+                    for field, _direction in node.fields
+                    if field not in computed_fields
+                )
             elif isinstance(node, UniquePlan) and node.fields:
-                self._validate_query_fields(node.fields)
+                self._validate_query_fields(
+                    field for field in node.fields if field not in computed_fields
+                )
             elif isinstance(node, FlattenPlan):
                 self._validate_query_fields((node.field,))
                 if self.schema.fields[node.field].type.kind not in {
@@ -133,6 +143,32 @@ class TableDataset(BaseDataset):
                         phase="plan",
                         details={"dataset": self.name, "field": node.field},
                     )
+            elif isinstance(node, SimilarityPlan):
+                self._validate_query_fields((node.field,))
+                field = self.schema.fields[node.field]
+                if "vector" not in field.constraints:
+                    raise EngineError(
+                        "invalid_vector_field",
+                        f"Field '{node.field}' is not a vector index",
+                        phase="plan",
+                        details={"dataset": self.name, "field": node.field},
+                    )
+                if (
+                    field.vector_dimension is not None
+                    and len(node.vector) != field.vector_dimension
+                ):
+                    raise EngineError(
+                        "vector_dimension",
+                        f"Vector field '{node.field}' requires "
+                        f"{field.vector_dimension} dimensions",
+                        phase="plan",
+                        details={
+                            "dataset": self.name,
+                            "field": node.field,
+                            "dimension": field.vector_dimension,
+                        },
+                    )
+                computed_fields.update({"_distance", "_similarity"})
 
     def _validate_aggregation(
         self,

@@ -187,6 +187,11 @@ kv
 vector
 ```
 
+`document` uses the schema and mutation contract of tables while preserving
+nested `json` values. `kv` records have exactly `{key, value}` and participate
+in normal filtering, projection, ordering, and pagination. `vector` is a
+schema-aware document collection with one or more vector-indexed fields.
+
 `timeseries` and `columnar` are reserved for future use.
 
 ## 5. Dataset definition
@@ -232,6 +237,12 @@ Example:
 
 ```neoql
 email(str(255), unique, index)
+```
+
+Vector fields use a numeric list and may declare their required dimension:
+
+```neoql
+embedding(list(float), vector(1536))
 ```
 
 ## 7. Dataset invocation
@@ -597,6 +608,18 @@ today()
 now()
 uuid()
 ```
+
+Vector similarity is a lazy Selection operation and must precede projection,
+ordering, and pagination:
+
+```neoql
+items().similarity(embedding, [0.1, 0.2, 0.3], cosine).limit(10)
+items().distance(embedding, [0.1, 0.2, 0.3]).limit(10)
+```
+
+Results are ordered by nearest distance and include `_distance` and
+`_similarity`. Cosine and Euclidean metrics are supported. Stored vectors and
+query vectors must match the declared dimension; cosine rejects zero vectors.
 
 User-defined functions:
 

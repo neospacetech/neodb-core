@@ -96,6 +96,7 @@ class FieldSchema:
     type: TypeDescriptor
     constraints: frozenset[str]
     default: Any = _MISSING
+    vector_dimension: int | None = None
 
     @property
     def nullable(self) -> bool:
@@ -145,7 +146,7 @@ class DatasetSchema:
                     f"Invalid type for field '{name}': {error}",
                     field=name,
                 ) from error
-            constraints, default = _parse_constraints(
+            constraints, default, vector_dimension = _parse_constraints(
                 name, raw_field.get("constraints", [])
             )
             if descriptor.kind == TypeKind.NULLABLE:
@@ -165,6 +166,17 @@ class DatasetSchema:
                     "Primary and unique fields require scalar values",
                     field=name,
                 )
+            vector_type = _unwrap_nullable(descriptor)
+            if "vector" in constraints and not (
+                vector_type.kind == TypeKind.LIST
+                and isinstance(vector_type.arguments[0], TypeDescriptor)
+                and vector_type.arguments[0].kind
+                in {TypeKind.INT, TypeKind.FLOAT, TypeKind.DECIMAL}
+            ):
+                raise SchemaDefinitionError(
+                    "vector requires a list of numeric values",
+                    field=name,
+                )
             if default is not _MISSING:
                 try:
                     default = cast_value(default, descriptor)
@@ -178,6 +190,7 @@ class DatasetSchema:
                 descriptor,
                 frozenset(constraints),
                 default,
+                vector_dimension,
             )
 
         primary_key = tuple(
@@ -323,7 +336,7 @@ class DatasetSchema:
                 value=None,
             )
         try:
-            return cast_value(value, field.type)
+            casted = cast_value(value, field.type)
         except NeoQLTypeError as error:
             raise ConstraintViolation(
                 "type",
@@ -333,13 +346,28 @@ class DatasetSchema:
                 value=value,
                 details={"expected": field.type.display()},
             ) from error
+        if field.vector_dimension is not None and len(casted) != field.vector_dimension:
+            raise ConstraintViolation(
+                "vector_dimension",
+                f"Vector field '{field.name}' requires "
+                f"{field.vector_dimension} dimensions",
+                dataset=self.dataset,
+                field=field.name,
+                value=value,
+                details={"dimension": field.vector_dimension},
+            )
+        return casted
 
 
-def _parse_constraints(field: str, raw_constraints: Any) -> tuple[set[str], Any]:
+def _parse_constraints(
+    field: str,
+    raw_constraints: Any,
+) -> tuple[set[str], Any, int | None]:
     if not isinstance(raw_constraints, (list, tuple)):
         raise SchemaDefinitionError("Field constraints must be a list", field=field)
     constraints: set[str] = set()
     default: Any = _MISSING
+    vector_dimension = None
     for raw_constraint in raw_constraints:
         if isinstance(raw_constraint, str):
             name = raw_constraint
@@ -365,9 +393,32 @@ def _parse_constraints(field: str, raw_constraints: Any) -> tuple[set[str], Any]
                     "default requires exactly one value", field=field
                 )
             default = arguments[0]
+        elif name == "vector":
+            if len(arguments) > 1 or (
+                arguments
+                and (
+                    not isinstance(arguments[0], int)
+                    or isinstance(arguments[0], bool)
+                    or arguments[0] <= 0
+                )
+            ):
+                raise SchemaDefinitionError(
+                    "vector accepts one positive integer dimension",
+                    field=field,
+                )
+            if arguments:
+                vector_dimension = arguments[0]
         elif arguments:
             raise SchemaDefinitionError(
                 f"{name} does not accept arguments", field=field
             )
         constraints.add(name)
-    return constraints, default
+    return constraints, default, vector_dimension
+
+
+def _unwrap_nullable(descriptor: TypeDescriptor) -> TypeDescriptor:
+    if descriptor.kind != TypeKind.NULLABLE:
+        return descriptor
+    wrapped = descriptor.arguments[0]
+    assert isinstance(wrapped, TypeDescriptor)
+    return wrapped

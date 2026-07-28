@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
+from datasets.document import DocumentDataset
 from datasets.graph import GraphDataset
 from datasets.kvs import KVSDataset
 from datasets.table import TableDataset
@@ -129,6 +130,10 @@ class NeoDBEngine:
             dataset = GraphDataset(name)
         elif dtype == "table":
             dataset = TableDataset(name=name, schema=schema)
+        elif dtype == "document":
+            dataset = DocumentDataset(name=name, schema=schema)
+        elif dtype == "vector":
+            dataset = DocumentDataset(name=name, schema=schema)
         elif dtype in ("kv", "kvs"):
             dataset = KVSDataset(name)
         else:
