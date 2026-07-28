@@ -921,3 +921,10 @@ No joins or foreign keys are written, graph syntax is not separate from table
 syntax, every intermediate value is a Selection, and the entire query can be
 optimized as one execution plan. This is the core NeoQL philosophy: **one
 language, one abstraction, many storage models.**
+
+Graph datasets are schemaless in draft v0.1. A predicate therefore expects its
+field to exist on every source record it examines; heterogeneous graph fixtures
+should provide the queried fields on all node shapes. The conformance suite
+executes the complete pipeline above with an employee, an intermediate project,
+and an active project, and verifies that neither binding nor `explain()` scans
+the dataset before final consumption.
