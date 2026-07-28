@@ -37,6 +37,11 @@ class ParameterReference(Node):
 
 
 @dataclass(frozen=True, slots=True)
+class SelectionValue(Node):
+    expression: "Expression"
+
+
+@dataclass(frozen=True, slots=True)
 class ListLiteral(Node):
     values: tuple["Value", ...]
 
@@ -46,7 +51,9 @@ class ObjectLiteral(Node):
     fields: tuple["RecordField", ...]
 
 
-Value: TypeAlias = Literal | ParameterReference | ListLiteral | ObjectLiteral
+Value: TypeAlias = (
+    Literal | ParameterReference | SelectionValue | ListLiteral | ObjectLiteral
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,6 +157,12 @@ class AddStatement(Node):
 
 
 @dataclass(frozen=True, slots=True)
+class AddSelectionStatement(Node):
+    source: "Expression"
+    dataset: str
+
+
+@dataclass(frozen=True, slots=True)
 class AddLinkStatement(Node):
     properties: RecordLiteral
     source: "SelectionStatement"
@@ -225,6 +238,7 @@ Expression: TypeAlias = (
 Statement: TypeAlias = (
     CreateDatasetStatement
     | AddStatement
+    | AddSelectionStatement
     | AddLinkStatement
     | SelectionStatement
     | UpdateStatement

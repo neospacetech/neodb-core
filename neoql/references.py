@@ -1,5 +1,6 @@
 """Typed dataset reference values."""
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -24,3 +25,18 @@ class ReferenceValue:
     def __str__(self) -> str:
         identity = ", ".join(f"{field}={value!r}" for field, value in self.identity)
         return f"{self.dataset}({identity})"
+
+
+@dataclass(frozen=True, slots=True)
+class SelectionQueryValue:
+    """A compiled lazy Selection used as a record value."""
+
+    query: Mapping[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class SelectionRecordsValue:
+    """Materialized Selection records awaiting typed reference resolution."""
+
+    dataset: str
+    records: tuple[Mapping[str, Any], ...]

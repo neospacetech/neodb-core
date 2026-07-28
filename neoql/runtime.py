@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from .ast import (
+    AddSelectionStatement,
     AlgebraExpression,
     CreateDatasetStatement,
     FunctionCallStatement,
@@ -16,6 +17,7 @@ from .ast import (
     ParameterReference,
     SelectionPipelineExpression,
     SelectionStatement,
+    SelectionValue,
     Statement,
     Value,
     VariableAssignmentStatement,
@@ -30,6 +32,7 @@ from .errors import (
     UnknownNameError,
 )
 from .parser import parse_statement, statement_to_query
+from .references import SelectionRecordsValue
 from .selection import Selection
 
 if TYPE_CHECKING:
@@ -89,6 +92,20 @@ class NeoQLSession:
         source: str,
         parameters: Mapping[str, Any],
     ) -> Any:
+        if isinstance(statement, AddSelectionStatement):
+            source_selection = self._require_selection(
+                self._evaluate(statement.source, source, parameters),
+                statement.source.span,
+                source,
+            )
+            records = source_selection.consume()
+            return self.engine.execute_query(
+                {
+                    "action": "insert",
+                    "dataset": statement.dataset,
+                    "objects": records,
+                }
+            )
         if isinstance(statement, AlgebraExpression):
             left = self._require_selection(
                 self._evaluate(statement.left, source, parameters),
@@ -152,7 +169,15 @@ class NeoQLSession:
                     return self._call(statement.dataset, [], statement.span, source)
             query = statement_to_query(statement, parameters)
             return self.engine.execute_query(query)
-        query = statement_to_query(statement, parameters)
+        query = statement_to_query(
+            statement,
+            parameters,
+            lambda value: self._resolve_selection_value(
+                value,
+                source,
+                parameters,
+            ),
+        )
         return self.engine.execute_query(query)
 
     @staticmethod
@@ -165,6 +190,22 @@ class NeoQLSession:
                 details={"actual": type(value).__name__},
             ).with_source(span, source)
         return value
+
+    def _resolve_selection_value(
+        self,
+        value: SelectionValue,
+        source: str,
+        parameters: Mapping[str, Any],
+    ) -> SelectionRecordsValue:
+        selection = self._require_selection(
+            self._evaluate(value.expression, source, parameters),
+            value.span,
+            source,
+        )
+        return SelectionRecordsValue(
+            selection.dataset,
+            tuple(selection.consume()),
+        )
 
     def _call(
         self,
@@ -215,6 +256,8 @@ class NeoQLSession:
                 field.name: self._value(field.value, parameters, source)
                 for field in value.fields
             }
+        if isinstance(value, SelectionValue):
+            return self._resolve_selection_value(value, source, parameters)
         return [self._value(item, parameters, source) for item in value.values]
 
     @staticmethod

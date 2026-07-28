@@ -25,7 +25,12 @@ from neoql.errors import (
     UnsupportedDatasetError,
 )
 from neoql.predicates import validate_predicate
-from neoql.references import ReferenceValue
+from neoql.references import (
+    ReferenceValue,
+    SelectionQueryValue,
+    SelectionRecordsValue,
+)
+from neoql.selection import Selection
 from neoql.types import TypeDescriptor, TypeKind, cast_value
 from storage import StorageManager
 
@@ -169,6 +174,7 @@ class NeoDBEngine:
         if self.active_transaction_id is None and query.get("action") in {
             "create_dataset",
             "insert",
+            "insert_selection",
             "update",
             "delete",
             "add_link",
@@ -198,6 +204,8 @@ class NeoDBEngine:
                 return {"status": "success", "dataset": dataset.name}
             case "add_link":
                 return self._add_link(query)
+            case "insert_selection":
+                return self._insert_selection(query)
 
         dataset = self.datasets.get(query["dataset"])
         if not dataset:
@@ -205,6 +213,33 @@ class NeoDBEngine:
         prepared = self._resolve_query_references(dataset, query)
         self._validate_mutation_references(dataset, prepared)
         return dataset.query(prepared)
+
+    def _insert_selection(self, query: Mapping[str, Any]) -> Any:
+        dataset_name = query.get("dataset")
+        if not isinstance(dataset_name, str) or dataset_name not in self.datasets:
+            raise DatasetNotFoundError(str(dataset_name))
+        source_query = query.get("source")
+        if not isinstance(source_query, Mapping):
+            raise EngineError(
+                "invalid_selection_insert",
+                "Selection insertion requires a compiled source Selection",
+                phase="compile",
+            )
+        source = self._execute_query(source_query)
+        if not isinstance(source, Selection):
+            raise EngineError(
+                "invalid_selection_insert",
+                "Selection insertion source must produce records",
+                phase="plan",
+            )
+        records = source.consume()
+        return self._execute_query(
+            {
+                "action": "insert",
+                "dataset": dataset_name,
+                "objects": records,
+            }
+        )
 
     def _add_link(self, query: Mapping[str, Any]) -> dict[str, Any]:
         source_query = query.get("source")
@@ -469,6 +504,7 @@ class NeoDBEngine:
         path: tuple[str, ...],
         seen: frozenset[int],
     ) -> Any:
+        value = self._materialize_selection_value(value)
         if descriptor.kind == TypeKind.NULLABLE:
             if value is None:
                 return None
@@ -478,8 +514,25 @@ class NeoDBEngine:
         if descriptor.kind == TypeKind.REFERENCE:
             target = descriptor.arguments[0]
             assert isinstance(target, str)
+            if isinstance(value, SelectionRecordsValue):
+                records = self._selection_reference_records(value, target)
+                if not records:
+                    raise MissingReferenceError(
+                        target,
+                        {"selection_count": 0},
+                    )
+                if len(records) != 1:
+                    raise AmbiguousReferenceError(
+                        target,
+                        {"selection_count": len(records)},
+                    )
+                value = records[0]
             return self._resolve_reference(target, value, path, seen)
         if descriptor.kind in {TypeKind.LIST, TypeKind.SET}:
+            if isinstance(value, SelectionRecordsValue):
+                member = descriptor.arguments[0]
+                assert isinstance(member, TypeDescriptor)
+                value = list(self._selection_records_for_descriptor(value, member))
             if not isinstance(value, (list, tuple, set, frozenset)):
                 return value
             member = descriptor.arguments[0]
@@ -489,6 +542,13 @@ class NeoDBEngine:
             ]
             return resolved if descriptor.kind == TypeKind.LIST else set(resolved)
         if descriptor.kind == TypeKind.TUPLE:
+            if isinstance(value, SelectionRecordsValue):
+                for member in descriptor.arguments:
+                    if isinstance(member, TypeDescriptor):
+                        target = _descriptor_reference_target(member)
+                        if target is not None and target != value.dataset:
+                            raise ReferenceConflictError(target, ["dataset"])
+                value = list(value.records)
             if not isinstance(value, (list, tuple)) or len(value) != len(
                 descriptor.arguments
             ):
@@ -515,6 +575,40 @@ class NeoDBEngine:
                 for key, item in value.items()
             }
         return value
+
+    def _materialize_selection_value(self, value: Any) -> Any:
+        if not isinstance(value, SelectionQueryValue):
+            return value
+        result = self._execute_query(value.query)
+        if not isinstance(result, Selection):
+            raise EngineError(
+                "invalid_selection_value",
+                "Selection value must produce records",
+                phase="plan",
+            )
+        return SelectionRecordsValue(
+            result.dataset,
+            tuple(result.consume()),
+        )
+
+    def _selection_reference_records(
+        self,
+        value: SelectionRecordsValue,
+        target: str,
+    ) -> tuple[Mapping[str, Any], ...]:
+        if value.dataset != target:
+            raise ReferenceConflictError(target, ["dataset"])
+        return value.records
+
+    def _selection_records_for_descriptor(
+        self,
+        value: SelectionRecordsValue,
+        descriptor: TypeDescriptor,
+    ) -> tuple[Mapping[str, Any], ...]:
+        target = _descriptor_reference_target(descriptor)
+        if target is not None:
+            return self._selection_reference_records(value, target)
+        return value.records
 
     def _resolve_reference(
         self,
@@ -700,6 +794,19 @@ def _reference_targets(descriptor: TypeDescriptor) -> list[str]:
         if isinstance(argument, TypeDescriptor)
         for target in _reference_targets(argument)
     ]
+
+
+def _descriptor_reference_target(descriptor: TypeDescriptor) -> str | None:
+    current = descriptor
+    while current.kind == TypeKind.NULLABLE:
+        wrapped = current.arguments[0]
+        assert isinstance(wrapped, TypeDescriptor)
+        current = wrapped
+    if current.kind != TypeKind.REFERENCE:
+        return None
+    target = current.arguments[0]
+    assert isinstance(target, str)
+    return target
 
 
 def _iter_references(value: Any) -> Iterator[ReferenceValue]:

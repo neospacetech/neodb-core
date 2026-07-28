@@ -2,6 +2,7 @@
 
 from .ast import (
     AddLinkStatement,
+    AddSelectionStatement,
     AddStatement,
     AlgebraExpression,
     CreateDatasetStatement,
@@ -12,6 +13,7 @@ from .ast import (
     ParameterReference,
     SelectionPipelineExpression,
     SelectionStatement,
+    SelectionValue,
     Statement,
     UpdateStatement,
     VariableAssignmentStatement,
@@ -50,7 +52,7 @@ from .predicates import (
     evaluate_predicate,
     validate_predicate,
 )
-from .references import ReferenceValue
+from .references import ReferenceValue, SelectionQueryValue, SelectionRecordsValue
 from .runtime import NeoQLSession
 from .schema import (
     ConstraintViolation,
@@ -91,6 +93,7 @@ from .types import (
 __all__ = [
     "AddStatement",
     "AddLinkStatement",
+    "AddSelectionStatement",
     "Aggregation",
     "AmbiguousReferenceError",
     "AlgebraExpression",
@@ -136,9 +139,12 @@ __all__ = [
     "ReferenceCycleError",
     "ReferenceInUseError",
     "ReferenceValue",
+    "SelectionQueryValue",
+    "SelectionRecordsValue",
     "ReversePlan",
     "SelectionStatement",
     "SelectionPipelineExpression",
+    "SelectionValue",
     "SchemaDefinitionError",
     "Selection",
     "SimilarityPlan",

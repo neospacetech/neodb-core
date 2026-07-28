@@ -335,7 +335,16 @@ Insert a record or an existing Selection with `add ... into ...`:
 ```neoql
 add {id=1, name="Alice"} into users
 add users() into archive
+add (activeUsers + invitedUsers).sort(id) into archive
 ```
+
+Selection insertion is lazy up to the mutation boundary. NeoDB consumes the
+source into a stable snapshot and then validates and inserts the complete
+snapshot using the destination dataset's normal schema and identity rules.
+An empty Selection is a successful no-op. Any destination error rolls back the
+whole insert. Self-insertion therefore sees each original record exactly once;
+it succeeds only when the destination's identity and uniqueness constraints
+permit the copied records.
 
 ## 12. Update and delete
 
@@ -368,17 +377,30 @@ fields used by an existing reference, fails with `reference_in_use`.
 Selections are valid values:
 
 ```neoql
-manager=users({id=7})
+add {
+    id=1,
+    manager=users({id=7}),
+    reviewers=users({active=true}).sort(id)
+} into projects
 ```
 
-Selections can also appear in collections:
+For a scalar reference, the Selection must contain exactly one record. An
+empty Selection raises `missing_reference`, and multiple records raise
+`ambiguous_reference`. For a reference collection, all selected records are
+expanded in Selection order. In both cases the Selection's source dataset must
+match the reference target or NeoDB raises `reference_conflict`.
+
+Selections can also appear as individual collection values:
 
 ```neoql
-set(
-    users({id=1}),
-    users({id=2})
-)
+add {
+    id=2,
+    reviewers=[users({id=1}), users({id=2})]
+} into projects
 ```
+
+Bound Selection values remain lazy. Parenthesize a bound value when using it
+as a record field, for example `reviewers=(activeUsers)`.
 
 ## 14. Automatic resolution
 

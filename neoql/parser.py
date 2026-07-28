@@ -1,10 +1,11 @@
 """Recursive-descent NeoQL parser and legacy query adapter."""
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any, NoReturn, TypeAlias, cast
 
 from .ast import (
     AddLinkStatement,
+    AddSelectionStatement,
     AddStatement,
     AlgebraExpression,
     Comparison,
@@ -30,6 +31,7 @@ from .ast import (
     SelectionOperation,
     SelectionPipelineExpression,
     SelectionStatement,
+    SelectionValue,
     Span,
     Statement,
     TypeRef,
@@ -41,8 +43,10 @@ from .ast import (
 )
 from .errors import NeoQLSyntaxError
 from .lexer import Token, TokenKind, tokenize
+from .references import SelectionQueryValue
 
 ParsedExpression: TypeAlias = Expression | UpdateStatement | DeleteStatement
+SelectionValueResolver: TypeAlias = Callable[[SelectionValue], Any]
 
 
 class Parser:
@@ -348,10 +352,35 @@ class Parser:
             end = self._consume(TokenKind.RIGHT_PAREN, "Expected ')' after constraint")
         return Constraint(self._span(name, end), name.lexeme, tuple(arguments))
 
-    def _add(self) -> AddStatement | AddLinkStatement:
+    def _add(
+        self,
+    ) -> AddStatement | AddSelectionStatement | AddLinkStatement:
         start = self._previous()
         if self._keyword("link"):
             return self._add_link(start)
+        if not self._check(TokenKind.LEFT_BRACE):
+            source = self._expression()
+            if not isinstance(
+                source,
+                (
+                    SelectionStatement,
+                    VariableReferenceStatement,
+                    FunctionCallStatement,
+                    AlgebraExpression,
+                    SelectionPipelineExpression,
+                ),
+            ):
+                self._error(start, "add expects records or a Selection")
+            self._consume_keyword("into")
+            dataset = self._consume(
+                TokenKind.IDENTIFIER,
+                "Expected destination dataset",
+            )
+            return AddSelectionStatement(
+                self._span(start, dataset),
+                source,
+                dataset.lexeme,
+            )
         records = [self._record()]
         while self._match(TokenKind.COMMA):
             records.append(self._record())
@@ -402,7 +431,7 @@ class Parser:
     def _record_field(self) -> RecordField:
         name = self._consume(TokenKind.IDENTIFIER, "Expected record field name")
         self._consume(TokenKind.EQUAL, "Expected '=' after record field name")
-        value = self._value()
+        value = self._value(allow_selection=True)
         return RecordField(Span(name.span.start, value.span.end), name.lexeme, value)
 
     def _selection(
@@ -603,7 +632,27 @@ class Parser:
             value,
         )
 
-    def _value(self) -> Value:
+    def _value(self, *, allow_selection: bool = False) -> Value:
+        if allow_selection and (
+            (
+                self._check(TokenKind.IDENTIFIER)
+                and self._check_next(TokenKind.LEFT_PAREN)
+            )
+            or self._check(TokenKind.LEFT_PAREN)
+        ):
+            expression = self._union_expression()
+            if not isinstance(
+                expression,
+                (
+                    SelectionStatement,
+                    VariableReferenceStatement,
+                    FunctionCallStatement,
+                    AlgebraExpression,
+                    SelectionPipelineExpression,
+                ),
+            ):
+                self._error(self._previous(), "Expected a Selection value")
+            return SelectionValue(expression.span, expression)
         if self._match(TokenKind.NUMBER, TokenKind.STRING):
             token = self._previous()
             return Literal(token.span, token.value)
@@ -625,9 +674,9 @@ class Parser:
             start = self._previous()
             values = []
             if not self._check(TokenKind.RIGHT_BRACKET):
-                values.append(self._value())
+                values.append(self._value(allow_selection=allow_selection))
                 while self._match(TokenKind.COMMA):
-                    values.append(self._value())
+                    values.append(self._value(allow_selection=allow_selection))
             end = self._consume(TokenKind.RIGHT_BRACKET, "Expected ']' after list")
             return ListLiteral(self._span(start, end), tuple(values))
         if self._check(TokenKind.LEFT_BRACE):
@@ -693,6 +742,7 @@ def parse_statement(source: str) -> Statement:
 def _value_to_python(
     value: Value,
     bindings: Mapping[str, Any] | None = None,
+    selection_resolver: SelectionValueResolver | None = None,
 ) -> Any:
     if isinstance(value, ParameterReference):
         if bindings is None or value.name not in bindings:
@@ -702,11 +752,28 @@ def _value_to_python(
                 "",
             )
         return bindings[value.name]
+    if isinstance(value, SelectionValue):
+        if selection_resolver is not None:
+            return selection_resolver(value)
+        if isinstance(value.expression, SelectionStatement):
+            return SelectionQueryValue(statement_to_query(value.expression, bindings))
+        raise NeoQLSyntaxError(
+            "Selection values containing bindings require a NeoQL session",
+            value.span,
+            "",
+        )
     if isinstance(value, ListLiteral):
-        return [_value_to_python(item, bindings) for item in value.values]
+        return [
+            _value_to_python(item, bindings, selection_resolver)
+            for item in value.values
+        ]
     if isinstance(value, ObjectLiteral):
         return {
-            field.name: _value_to_python(field.value, bindings)
+            field.name: _value_to_python(
+                field.value,
+                bindings,
+                selection_resolver,
+            )
             for field in value.fields
         }
     return value.value
@@ -715,6 +782,7 @@ def _value_to_python(
 def _predicate_to_query(
     predicate: Predicate | None,
     bindings: Mapping[str, Any] | None = None,
+    selection_resolver: SelectionValueResolver | None = None,
 ) -> dict[str, Any] | None:
     if predicate is None:
         return None
@@ -722,13 +790,24 @@ def _predicate_to_query(
         return {
             "field": predicate.field,
             "op": predicate.operator,
-            "value": _value_to_python(predicate.value, bindings),
+            "value": _value_to_python(
+                predicate.value,
+                bindings,
+                selection_resolver,
+            ),
         }
     if isinstance(predicate, Negation):
-        return {"not": _predicate_to_query(predicate.operand, bindings)}
+        return {
+            "not": _predicate_to_query(
+                predicate.operand,
+                bindings,
+                selection_resolver,
+            )
+        }
     return {
         predicate.operator: [
-            _predicate_to_query(operand, bindings) for operand in predicate.operands
+            _predicate_to_query(operand, bindings, selection_resolver)
+            for operand in predicate.operands
         ]
     }
 
@@ -736,15 +815,22 @@ def _predicate_to_query(
 def _record_to_dict(
     record: RecordLiteral,
     bindings: Mapping[str, Any] | None = None,
+    selection_resolver: SelectionValueResolver | None = None,
 ) -> dict[str, Any]:
     return {
-        field.name: _value_to_python(field.value, bindings) for field in record.fields
+        field.name: _value_to_python(
+            field.value,
+            bindings,
+            selection_resolver,
+        )
+        for field in record.fields
     }
 
 
 def statement_to_query(
     statement: Statement,
     bindings: Mapping[str, Any] | None = None,
+    selection_resolver: SelectionValueResolver | None = None,
 ) -> dict[str, Any]:
     """Adapt an AST statement to the current engine query contract."""
     if isinstance(statement, CreateDatasetStatement):
@@ -770,7 +856,11 @@ def statement_to_query(
                             {
                                 "name": constraint.name,
                                 "arguments": [
-                                    _value_to_python(argument, bindings)
+                                    _value_to_python(
+                                        argument,
+                                        bindings,
+                                        selection_resolver,
+                                    )
                                     for argument in constraint.arguments
                                 ],
                             }
@@ -802,28 +892,69 @@ def statement_to_query(
             "action": "insert",
             "dataset": statement.dataset,
             "objects": [
-                _record_to_dict(record, bindings) for record in statement.records
+                _record_to_dict(record, bindings, selection_resolver)
+                for record in statement.records
             ],
+        }
+    if isinstance(statement, AddSelectionStatement):
+        if not isinstance(statement.source, SelectionStatement):
+            raise NeoQLSyntaxError(
+                "Selection insertion containing bindings requires a NeoQL session",
+                statement.source.span,
+                "",
+            )
+        return {
+            "action": "insert_selection",
+            "dataset": statement.dataset,
+            "source": statement_to_query(
+                statement.source,
+                bindings,
+                selection_resolver,
+            ),
         }
     if isinstance(statement, AddLinkStatement):
         return {
             "action": "add_link",
-            "properties": _record_to_dict(statement.properties, bindings),
-            "source": statement_to_query(statement.source, bindings),
-            "target": statement_to_query(statement.target, bindings),
+            "properties": _record_to_dict(
+                statement.properties,
+                bindings,
+                selection_resolver,
+            ),
+            "source": statement_to_query(
+                statement.source,
+                bindings,
+                selection_resolver,
+            ),
+            "target": statement_to_query(
+                statement.target,
+                bindings,
+                selection_resolver,
+            ),
         }
     if isinstance(statement, UpdateStatement):
         return {
             "action": "update",
             "dataset": statement.dataset,
-            "filter": _predicate_to_query(statement.predicate, bindings),
-            "values": _record_to_dict(statement.values, bindings),
+            "filter": _predicate_to_query(
+                statement.predicate,
+                bindings,
+                selection_resolver,
+            ),
+            "values": _record_to_dict(
+                statement.values,
+                bindings,
+                selection_resolver,
+            ),
         }
     if isinstance(statement, DeleteStatement):
         return {
             "action": "delete",
             "dataset": statement.dataset,
-            "filter": _predicate_to_query(statement.predicate, bindings),
+            "filter": _predicate_to_query(
+                statement.predicate,
+                bindings,
+                selection_resolver,
+            ),
         }
     if not isinstance(statement, SelectionStatement):
         raise NeoQLSyntaxError(
@@ -834,7 +965,11 @@ def statement_to_query(
     query = {
         "action": "select",
         "dataset": statement.dataset,
-        "filter": _predicate_to_query(statement.predicate, bindings),
+        "filter": _predicate_to_query(
+            statement.predicate,
+            bindings,
+            selection_resolver,
+        ),
     }
     grouping = False
     aggregated = False
@@ -868,7 +1003,11 @@ def statement_to_query(
             pipeline.append(
                 {
                     "operation": "where",
-                    "predicate": _predicate_to_query(operation.predicate, bindings),
+                    "predicate": _predicate_to_query(
+                        operation.predicate,
+                        bindings,
+                        selection_resolver,
+                    ),
                 }
             )
             extended_pipeline = True
@@ -876,7 +1015,7 @@ def statement_to_query(
         arguments = tuple(
             argument
             if isinstance(argument, str)
-            else _value_to_python(argument, bindings)
+            else _value_to_python(argument, bindings, selection_resolver)
             for argument in operation.arguments
         )
         aggregate_methods = {
