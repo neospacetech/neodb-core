@@ -111,6 +111,70 @@ class NeoQLSyntaxError(DiagnosticError):
         return self.span.start.column
 
 
+class ResolutionError(DiagnosticError):
+    """A source-located language name or binding error."""
+
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        details: Mapping[str, Any] | None = None,
+    ):
+        super().__init__(
+            code,
+            message,
+            category="resolution",
+            phase="resolve",
+            details=details,
+        )
+
+
+class UnknownNameError(ResolutionError):
+    def __init__(self, name: str):
+        super().__init__(
+            "unknown_name",
+            f"Unknown name '{name}'",
+            details={"name": name},
+        )
+
+
+class ImmutableBindingError(ResolutionError):
+    def __init__(self, name: str):
+        super().__init__(
+            "immutable_binding",
+            f"Cannot reassign immutable binding '{name}'",
+            details={"name": name},
+        )
+
+
+class UnknownFunctionError(ResolutionError):
+    def __init__(self, name: str):
+        super().__init__(
+            "unknown_function",
+            f"Unknown function '{name}'",
+            details={"function": name},
+        )
+
+
+class FunctionArityError(ResolutionError):
+    def __init__(self, name: str, expected: int, actual: int):
+        super().__init__(
+            "function_arity",
+            f"Function '{name}' expects {expected} arguments, received {actual}",
+            details={"function": name, "expected": expected, "actual": actual},
+        )
+
+
+class RecursionNotAllowedError(ResolutionError):
+    def __init__(self, name: str):
+        super().__init__(
+            "recursion_not_allowed",
+            f"Recursive call to '{name}' is not allowed",
+            details={"function": name},
+        )
+
+
 class EngineError(DiagnosticError):
     """A planner or runtime engine failure."""
 

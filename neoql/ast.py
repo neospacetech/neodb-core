@@ -32,6 +32,11 @@ class Literal(Node):
 
 
 @dataclass(frozen=True, slots=True)
+class ParameterReference(Node):
+    name: str
+
+
+@dataclass(frozen=True, slots=True)
 class ListLiteral(Node):
     values: tuple["Value", ...]
 
@@ -41,7 +46,7 @@ class ObjectLiteral(Node):
     fields: tuple["RecordField", ...]
 
 
-Value: TypeAlias = Literal | ListLiteral | ObjectLiteral
+Value: TypeAlias = Literal | ParameterReference | ListLiteral | ObjectLiteral
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,6 +171,35 @@ class DeleteStatement(Node):
     predicate: Predicate | None
 
 
+@dataclass(frozen=True, slots=True)
+class VariableAssignmentStatement(Node):
+    name: str
+    expression: "Expression"
+
+
+@dataclass(frozen=True, slots=True)
+class VariableReferenceStatement(Node):
+    name: str
+
+
+@dataclass(frozen=True, slots=True)
+class FunctionDeclarationStatement(Node):
+    name: str
+    parameters: tuple[str, ...]
+    body: "Expression"
+
+
+@dataclass(frozen=True, slots=True)
+class FunctionCallStatement(Node):
+    name: str
+    arguments: tuple[Value, ...]
+
+
+Expression: TypeAlias = (
+    SelectionStatement | VariableReferenceStatement | FunctionCallStatement
+)
+
+
 Statement: TypeAlias = (
     CreateDatasetStatement
     | AddStatement
@@ -173,4 +207,8 @@ Statement: TypeAlias = (
     | SelectionStatement
     | UpdateStatement
     | DeleteStatement
+    | VariableAssignmentStatement
+    | VariableReferenceStatement
+    | FunctionDeclarationStatement
+    | FunctionCallStatement
 )

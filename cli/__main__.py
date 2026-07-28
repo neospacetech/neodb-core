@@ -8,6 +8,7 @@ import json
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from weakref import WeakKeyDictionary
 
 from engine import NeoDBEngine
 from neoql.ast import (
@@ -20,6 +21,7 @@ from neoql.parser import (
     parse_statement,
     statement_to_query,
 )
+from neoql.runtime import NeoQLSession
 from neoql.selection import Aggregation, GroupedSelection, Selection
 
 from .source import StatementBuffer, split_script
@@ -68,6 +70,8 @@ NeoDB CLI - Available commands:
         "Usage: <dataset>({filters}).delete()\nExample: users({inactive=true}).delete()"
     ),
 }
+
+_SESSIONS: WeakKeyDictionary[NeoDBEngine, NeoQLSession] = WeakKeyDictionary()
 
 
 def parse_literal(value: str):
@@ -237,14 +241,30 @@ def execute_cli_command(engine: NeoDBEngine, cmd: str, transaction_space=None):
         print(f"Transaction {transaction_id} aborted.")
         return transaction_id
 
+    if cmd.lower().strip().startswith("help"):
+        show_help()
+        return None
     try:
-        json_query = parse_cli_command(cmd)
+        if cmd.strip().lower().startswith("transaction"):
+            result = engine.execute_query(compile_source(cmd))
+        else:
+            result = _session_for(engine).execute(cmd)
     except DiagnosticError as error:
         print_diagnostic(error)
         return None
-    if not json_query:
-        return None
-    return run(engine, json_query)
+    return (
+        result.consume()
+        if isinstance(result, (Selection, GroupedSelection, Aggregation))
+        else result
+    )
+
+
+def _session_for(engine: NeoDBEngine) -> NeoQLSession:
+    session = _SESSIONS.get(engine)
+    if session is None:
+        session = NeoQLSession(engine)
+        _SESSIONS[engine] = session
+    return session
 
 
 def run(engine: NeoDBEngine, json_query):
@@ -284,11 +304,14 @@ def run_script(path: str | Path, engine: NeoDBEngine | None = None) -> int:
         return 2
 
     runtime = engine or NeoDBEngine()
+    session = NeoQLSession(runtime)
     for statement in split_script(source):
         located_source = "\n" * (statement.start_line - 1) + statement.source
         try:
-            query = compile_source(located_source)
-            result = runtime.execute_query(query)
+            if statement.source.strip().lower().startswith("transaction"):
+                result = runtime.execute_query(compile_source(located_source))
+            else:
+                result = session.execute(located_source)
             if isinstance(result, (Selection, GroupedSelection, Aggregation)):
                 result = result.consume()
             print(json.dumps(result, sort_keys=True, default=str))

@@ -118,7 +118,11 @@ class Selection:
 
     @classmethod
     def from_query(cls, source: Any, query: Mapping[str, Any]) -> "Selection":
-        selection = cls(source)
+        return cls(source).refine(query)
+
+    def refine(self, query: Mapping[str, Any]) -> "Selection":
+        """Append the selection clauses in a compiled query to this lazy plan."""
+        selection = self
         predicate = query.get("filter")
         if predicate:
             selection = selection.where(predicate)

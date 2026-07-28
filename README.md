@@ -486,6 +486,19 @@ adults = users({age>=18})
 employees = users({role="Engineer"})
 ```
 
+Assignment stores the Selection plan without scanning its dataset. A binding
+cannot be reassigned or redeclared in the same session. Referencing the name
+returns its Selection, and `name()` can append more Selection operations without
+changing the stored plan:
+
+```neoql
+firstTenAdults = adults().order(age asc).limit(10)
+firstTenAdults
+```
+
+Bindings are session-local: a script and an interactive shell retain them
+between statements, but a new process starts with an empty language scope.
+
 ## 19. Selection algebra
 
 | Operation | Syntax |
@@ -658,10 +671,19 @@ query vectors must match the declared dimension; cosine rejects zero vectors.
 User-defined functions:
 
 ```neoql
-function fullName(first, last){
-    ...
+function adultsByRole(role){
+    users({age>=18, role=role})
 }
+
+adultsByRole("Engineer")
 ```
+
+The function body is one expression and its value is the return value.
+Parameters are immutable, call-local values and may be used in predicates and
+Selection method arguments. Functions can call session declarations and refer
+to session-level Selection bindings. Declarations become visible after their
+definition; parameters do not escape their call. Direct or indirect recursion
+is rejected in draft v0.1 with a `recursion_not_allowed` diagnostic.
 
 ## 28. Lazy execution
 

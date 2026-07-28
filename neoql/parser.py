@@ -1,6 +1,7 @@
 """Recursive-descent NeoQL parser and legacy query adapter."""
 
-from typing import Any, NoReturn
+from collections.abc import Mapping
+from typing import Any, NoReturn, cast
 
 from .ast import (
     AddLinkStatement,
@@ -9,13 +10,17 @@ from .ast import (
     Constraint,
     CreateDatasetStatement,
     DeleteStatement,
+    Expression,
     FieldDefinition,
+    FunctionCallStatement,
+    FunctionDeclarationStatement,
     ListLiteral,
     Literal,
     Logical,
     MethodCall,
     Negation,
     ObjectLiteral,
+    ParameterReference,
     Predicate,
     Projection,
     ProjectionField,
@@ -27,6 +32,8 @@ from .ast import (
     TypeRef,
     UpdateStatement,
     Value,
+    VariableAssignmentStatement,
+    VariableReferenceStatement,
 )
 from .errors import NeoQLSyntaxError
 from .lexer import Token, TokenKind, tokenize
@@ -39,6 +46,7 @@ class Parser:
         self.source = source
         self.tokens = tokenize(source)
         self.current = 0
+        self.parameters: frozenset[str] = frozenset()
 
     def parse(self) -> Statement:
         statement: Statement
@@ -46,10 +54,95 @@ class Parser:
             statement = self._create_dataset()
         elif self._keyword("add"):
             statement = self._add()
+        elif self._keyword("function"):
+            statement = self._function_declaration()
+        elif self._check(TokenKind.IDENTIFIER) and self._check_next(TokenKind.EQUAL):
+            statement = self._variable_assignment()
         else:
-            statement = self._selection()
+            statement = self._expression(allow_mutation=True)
         self._consume(TokenKind.EOF, "Expected end of statement")
         return statement
+
+    def _expression(
+        self,
+        *,
+        allow_mutation: bool = False,
+    ) -> (
+        SelectionStatement
+        | UpdateStatement
+        | DeleteStatement
+        | VariableReferenceStatement
+        | FunctionCallStatement
+    ):
+        if self._check(TokenKind.IDENTIFIER) and self._peek_at(1).kind in {
+            TokenKind.EOF,
+            TokenKind.RIGHT_BRACE,
+        }:
+            name = self._advance()
+            return VariableReferenceStatement(name.span, name.lexeme)
+        if (
+            self._check(TokenKind.IDENTIFIER)
+            and self._check_next(TokenKind.LEFT_PAREN)
+            and self._peek_at(2).kind
+            not in {TokenKind.LEFT_BRACE, TokenKind.RIGHT_PAREN}
+        ):
+            return self._function_call()
+        selection = self._selection()
+        if not isinstance(selection, SelectionStatement) and not allow_mutation:
+            self._error(self._previous(), "Mutations are not expressions")
+        return selection
+
+    def _variable_assignment(self) -> VariableAssignmentStatement:
+        name = self._consume(TokenKind.IDENTIFIER, "Expected variable name")
+        self._consume(TokenKind.EQUAL, "Expected '=' after variable name")
+        expression = cast(Expression, self._expression())
+        return VariableAssignmentStatement(
+            Span(name.span.start, expression.span.end),
+            name.lexeme,
+            expression,
+        )
+
+    def _function_declaration(self) -> FunctionDeclarationStatement:
+        start = self._previous()
+        name = self._consume(TokenKind.IDENTIFIER, "Expected function name")
+        self._consume(TokenKind.LEFT_PAREN, "Expected '(' after function name")
+        parameters: list[str] = []
+        if not self._check(TokenKind.RIGHT_PAREN):
+            parameter = self._consume(TokenKind.IDENTIFIER, "Expected parameter name")
+            parameters.append(parameter.lexeme)
+            while self._match(TokenKind.COMMA):
+                parameter = self._consume(
+                    TokenKind.IDENTIFIER, "Expected parameter name"
+                )
+                parameters.append(parameter.lexeme)
+        self._consume(TokenKind.RIGHT_PAREN, "Expected ')' after parameters")
+        if len(parameters) != len(set(parameters)):
+            self._error(name, "Function parameters must be unique")
+        self._consume(TokenKind.LEFT_BRACE, "Expected '{' before function body")
+        previous = self.parameters
+        self.parameters = frozenset(parameters)
+        try:
+            body = cast(Expression, self._expression())
+        finally:
+            self.parameters = previous
+        end = self._consume(TokenKind.RIGHT_BRACE, "Expected '}' after function body")
+        return FunctionDeclarationStatement(
+            self._span(start, end),
+            name.lexeme,
+            tuple(parameters),
+            body,
+        )
+
+    def _function_call(self) -> FunctionCallStatement:
+        name = self._consume(TokenKind.IDENTIFIER, "Expected function name")
+        self._consume(TokenKind.LEFT_PAREN, "Expected '(' after function name")
+        arguments = [self._value()]
+        while self._match(TokenKind.COMMA):
+            arguments.append(self._value())
+        end = self._consume(TokenKind.RIGHT_PAREN, "Expected ')' after arguments")
+        return FunctionCallStatement(
+            self._span(name, end), name.lexeme, tuple(arguments)
+        )
 
     def _create_dataset(self) -> CreateDatasetStatement:
         start = self._previous()
@@ -292,6 +385,8 @@ class Parser:
     def _method_argument(self) -> Value | str:
         if self._check(TokenKind.IDENTIFIER):
             token = self._advance()
+            if token.lexeme in self.parameters:
+                return ParameterReference(token.span, token.lexeme)
             return token.lexeme
         return self._value()
 
@@ -378,6 +473,8 @@ class Parser:
             return Literal(token.span, token.value)
         if self._match(TokenKind.IDENTIFIER):
             token = self._previous()
+            if token.lexeme in self.parameters:
+                return ParameterReference(token.span, token.lexeme)
             keyword_values = {
                 "true": True,
                 "false": False,
@@ -427,6 +524,12 @@ class Parser:
     def _check(self, kind: TokenKind) -> bool:
         return self._peek().kind == kind
 
+    def _check_next(self, kind: TokenKind) -> bool:
+        return self._peek_at(1).kind == kind
+
+    def _peek_at(self, distance: int) -> Token:
+        return self.tokens[min(self.current + distance, len(self.tokens) - 1)]
+
     def _advance(self) -> Token:
         token = self._peek()
         if token.kind != TokenKind.EOF:
@@ -451,37 +554,62 @@ def parse_statement(source: str) -> Statement:
     return Parser(source).parse()
 
 
-def _value_to_python(value: Value) -> Any:
+def _value_to_python(
+    value: Value,
+    bindings: Mapping[str, Any] | None = None,
+) -> Any:
+    if isinstance(value, ParameterReference):
+        if bindings is None or value.name not in bindings:
+            raise NeoQLSyntaxError(
+                f"Unresolved parameter '{value.name}'",
+                value.span,
+                "",
+            )
+        return bindings[value.name]
     if isinstance(value, ListLiteral):
-        return [_value_to_python(item) for item in value.values]
+        return [_value_to_python(item, bindings) for item in value.values]
     if isinstance(value, ObjectLiteral):
-        return {field.name: _value_to_python(field.value) for field in value.fields}
+        return {
+            field.name: _value_to_python(field.value, bindings)
+            for field in value.fields
+        }
     return value.value
 
 
-def _predicate_to_query(predicate: Predicate | None) -> dict[str, Any] | None:
+def _predicate_to_query(
+    predicate: Predicate | None,
+    bindings: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
     if predicate is None:
         return None
     if isinstance(predicate, Comparison):
         return {
             "field": predicate.field,
             "op": predicate.operator,
-            "value": _value_to_python(predicate.value),
+            "value": _value_to_python(predicate.value, bindings),
         }
     if isinstance(predicate, Negation):
-        return {"not": _predicate_to_query(predicate.operand)}
+        return {"not": _predicate_to_query(predicate.operand, bindings)}
     return {
         predicate.operator: [
-            _predicate_to_query(operand) for operand in predicate.operands
+            _predicate_to_query(operand, bindings) for operand in predicate.operands
         ]
     }
 
 
-def _record_to_dict(record: RecordLiteral) -> dict[str, Any]:
-    return {field.name: _value_to_python(field.value) for field in record.fields}
+def _record_to_dict(
+    record: RecordLiteral,
+    bindings: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        field.name: _value_to_python(field.value, bindings) for field in record.fields
+    }
 
 
-def statement_to_query(statement: Statement) -> dict[str, Any]:
+def statement_to_query(
+    statement: Statement,
+    bindings: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Adapt an AST statement to the current engine query contract."""
     if isinstance(statement, CreateDatasetStatement):
         from .schema import DatasetSchema, SchemaDefinitionError
@@ -506,7 +634,7 @@ def statement_to_query(statement: Statement) -> dict[str, Any]:
                             {
                                 "name": constraint.name,
                                 "arguments": [
-                                    _value_to_python(argument)
+                                    _value_to_python(argument, bindings)
                                     for argument in constraint.arguments
                                 ],
                             }
@@ -537,32 +665,40 @@ def statement_to_query(statement: Statement) -> dict[str, Any]:
         return {
             "action": "insert",
             "dataset": statement.dataset,
-            "objects": [_record_to_dict(record) for record in statement.records],
+            "objects": [
+                _record_to_dict(record, bindings) for record in statement.records
+            ],
         }
     if isinstance(statement, AddLinkStatement):
         return {
             "action": "add_link",
-            "properties": _record_to_dict(statement.properties),
-            "source": statement_to_query(statement.source),
-            "target": statement_to_query(statement.target),
+            "properties": _record_to_dict(statement.properties, bindings),
+            "source": statement_to_query(statement.source, bindings),
+            "target": statement_to_query(statement.target, bindings),
         }
     if isinstance(statement, UpdateStatement):
         return {
             "action": "update",
             "dataset": statement.dataset,
-            "filter": _predicate_to_query(statement.predicate),
-            "values": _record_to_dict(statement.values),
+            "filter": _predicate_to_query(statement.predicate, bindings),
+            "values": _record_to_dict(statement.values, bindings),
         }
     if isinstance(statement, DeleteStatement):
         return {
             "action": "delete",
             "dataset": statement.dataset,
-            "filter": _predicate_to_query(statement.predicate),
+            "filter": _predicate_to_query(statement.predicate, bindings),
         }
+    if not isinstance(statement, SelectionStatement):
+        raise NeoQLSyntaxError(
+            "Language bindings and functions require a NeoQL session",
+            statement.span,
+            "",
+        )
     query = {
         "action": "select",
         "dataset": statement.dataset,
-        "filter": _predicate_to_query(statement.predicate),
+        "filter": _predicate_to_query(statement.predicate, bindings),
     }
     grouping = False
     aggregated = False
@@ -582,6 +718,12 @@ def statement_to_query(statement: Statement) -> dict[str, Any]:
                 )
             query["select"] = [field.name for field in operation.fields]
             continue
+        arguments = tuple(
+            argument
+            if isinstance(argument, str)
+            else _value_to_python(argument, bindings)
+            for argument in operation.arguments
+        )
         aggregate_methods = {
             "count",
             "sum",
@@ -598,15 +740,15 @@ def statement_to_query(statement: Statement) -> dict[str, Any]:
                 "",
             )
         if operation.name == "order":
-            if not operation.arguments or not isinstance(operation.arguments[0], str):
+            if not arguments or not isinstance(arguments[0], str):
                 raise NeoQLSyntaxError(
                     "order() expects a field name",
                     operation.span,
                     "",
                 )
             direction = "asc"
-            if len(operation.arguments) > 1:
-                direction = str(operation.arguments[1]).lower()
+            if len(arguments) > 1:
+                direction = str(arguments[1]).lower()
             if direction not in {"asc", "desc"}:
                 raise NeoQLSyntaxError(
                     "order direction must be 'asc' or 'desc'",
@@ -614,20 +756,20 @@ def statement_to_query(statement: Statement) -> dict[str, Any]:
                     "",
                 )
             query.setdefault("order_by", []).append(
-                {"field": operation.arguments[0], "direction": direction}
+                {"field": arguments[0], "direction": direction}
             )
         elif operation.name in {"limit", "offset"}:
             if (
-                len(operation.arguments) != 1
-                or not isinstance(operation.arguments[0], Literal)
-                or not isinstance(operation.arguments[0].value, int)
+                len(arguments) != 1
+                or isinstance(arguments[0], bool)
+                or not isinstance(arguments[0], int)
             ):
                 raise NeoQLSyntaxError(
                     f"{operation.name}() expects one integer",
                     operation.span,
                     "",
                 )
-            query[operation.name] = operation.arguments[0].value
+            query[operation.name] = arguments[0]
         elif operation.name in {"distance", "similarity"}:
             if any(key in query for key in {"select", "order_by", "limit", "offset"}):
                 raise NeoQLSyntaxError(
@@ -637,13 +779,10 @@ def statement_to_query(statement: Statement) -> dict[str, Any]:
                     "",
                 )
             if (
-                len(operation.arguments) not in {2, 3}
-                or not isinstance(operation.arguments[0], str)
-                or not isinstance(operation.arguments[1], ListLiteral)
-                or (
-                    len(operation.arguments) == 3
-                    and not isinstance(operation.arguments[2], str)
-                )
+                len(arguments) not in {2, 3}
+                or not isinstance(arguments[0], str)
+                or not isinstance(arguments[1], list)
+                or (len(arguments) == 3 and not isinstance(arguments[2], str))
             ):
                 raise NeoQLSyntaxError(
                     f"{operation.name}() expects a field, vector, and optional metric",
@@ -651,25 +790,25 @@ def statement_to_query(statement: Statement) -> dict[str, Any]:
                     "",
                 )
             metric = (
-                operation.arguments[2]
-                if len(operation.arguments) == 3
+                arguments[2]
+                if len(arguments) == 3
                 else ("euclidean" if operation.name == "distance" else "cosine")
             )
             query["similarity"] = {
-                "field": operation.arguments[0],
-                "vector": _value_to_python(operation.arguments[1]),
+                "field": arguments[0],
+                "vector": arguments[1],
                 "metric": metric,
             }
         elif operation.name == "traverse":
             if (
-                len(operation.arguments) not in {1, 2}
-                or not isinstance(operation.arguments[0], str)
+                len(arguments) not in {1, 2}
+                or not isinstance(arguments[0], str)
                 or (
-                    len(operation.arguments) == 2
+                    len(arguments) == 2
                     and (
-                        not isinstance(operation.arguments[1], Literal)
-                        or not isinstance(operation.arguments[1].value, int)
-                        or operation.arguments[1].value < 1
+                        isinstance(arguments[1], bool)
+                        or not isinstance(arguments[1], int)
+                        or arguments[1] < 1
                     )
                 )
             ):
@@ -679,16 +818,11 @@ def statement_to_query(statement: Statement) -> dict[str, Any]:
                     "",
                 )
             query["traverse"] = {
-                "label": operation.arguments[0],
-                "depth": (
-                    operation.arguments[1].value
-                    if len(operation.arguments) == 2
-                    and isinstance(operation.arguments[1], Literal)
-                    else 1
-                ),
+                "label": arguments[0],
+                "depth": arguments[1] if len(arguments) == 2 else 1,
             }
         elif operation.name == "explain":
-            if operation.arguments:
+            if arguments:
                 raise NeoQLSyntaxError(
                     "explain() does not accept arguments",
                     operation.span,
@@ -697,25 +831,20 @@ def statement_to_query(statement: Statement) -> dict[str, Any]:
             query["explain"] = True
             aggregated = True
         elif operation.name == "group":
-            if (
-                grouping
-                or len(operation.arguments) != 1
-                or not isinstance(operation.arguments[0], str)
-            ):
+            if grouping or len(arguments) != 1 or not isinstance(arguments[0], str):
                 raise NeoQLSyntaxError(
                     "group() expects one field name",
                     operation.span,
                     "",
                 )
-            query["group_by"] = operation.arguments[0]
+            query["group_by"] = arguments[0]
             grouping = True
         elif operation.name in aggregate_methods:
             expects_field = operation.name != "count"
             valid_arguments = (
-                len(operation.arguments) == 1
-                and isinstance(operation.arguments[0], str)
+                len(arguments) == 1 and isinstance(arguments[0], str)
                 if expects_field
-                else not operation.arguments
+                else not arguments
             )
             if not valid_arguments:
                 expectation = "one field name" if expects_field else "no arguments"
@@ -726,7 +855,7 @@ def statement_to_query(statement: Statement) -> dict[str, Any]:
                 )
             aggregate: dict[str, Any] = {"operation": operation.name}
             if expects_field:
-                aggregate["field"] = operation.arguments[0]
+                aggregate["field"] = arguments[0]
             query["aggregate"] = aggregate
             aggregated = True
         else:
