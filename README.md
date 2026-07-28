@@ -262,6 +262,17 @@ Supported operators:
 in  contains  startsWith  endsWith  matches
 ```
 
+Precedence is unary `!`, then `&&`, then `||`; parentheses override it.
+Predicates are validated against table schemas before scanning any records.
+Numeric types compare with one another, string types compare with one another,
+and incompatible operands raise a structured predicate error rather than being
+silently coerced.
+
+`null` is equal only to `null`, and ordering comparisons involving `null`
+evaluate to false. Membership requires a collection operand, string operations
+require strings, and invalid regular expressions are reported as predicate
+errors with stable codes.
+
 ## 9. Projection
 
 Projection uses parentheses:

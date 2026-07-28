@@ -4,6 +4,7 @@ from datasets.base import BaseDataset
 from datasets.graph import GraphDataset
 from datasets.kvs import KVSDataset
 from datasets.table import TableDataset
+from neoql.predicates import PredicateEvaluationError
 
 
 class FilterTests(unittest.TestCase):
@@ -39,15 +40,13 @@ class FilterTests(unittest.TestCase):
             )
         )
 
-    def test_missing_values_and_unknown_operators_do_not_match(self):
-        self.assertFalse(
+    def test_missing_values_and_unknown_operators_are_errors(self):
+        with self.assertRaises(PredicateEvaluationError):
             BaseDataset._apply_filter({}, {"field": "missing", "op": ">", "value": 1})
-        )
-        self.assertFalse(
+        with self.assertRaises(PredicateEvaluationError):
             BaseDataset._apply_filter(
                 {"value": 1}, {"field": "value", "op": "unknown", "value": 1}
             )
-        )
 
 
 class GraphDatasetTests(unittest.TestCase):

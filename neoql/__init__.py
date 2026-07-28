@@ -9,6 +9,12 @@ from .ast import (
 from .errors import NeoQLSyntaxError
 from .lexer import Lexer, Token, TokenKind, tokenize
 from .parser import parse_statement, statement_to_query
+from .predicates import (
+    PredicateEvaluationError,
+    evaluate_operator,
+    evaluate_predicate,
+    validate_predicate,
+)
 from .schema import (
     ConstraintViolation,
     DatasetSchema,
@@ -36,6 +42,7 @@ __all__ = [
     "Lexer",
     "NeoQLSyntaxError",
     "NeoQLTypeError",
+    "PredicateEvaluationError",
     "SelectionStatement",
     "SchemaDefinitionError",
     "Statement",
@@ -44,10 +51,13 @@ __all__ = [
     "TypeDescriptor",
     "TypeKind",
     "cast_value",
+    "evaluate_operator",
+    "evaluate_predicate",
     "infer_type",
     "parse_type",
     "parse_statement",
     "statement_to_query",
     "tokenize",
+    "validate_predicate",
     "resolve_type",
 ]

@@ -1,6 +1,7 @@
 from collections.abc import Callable, Mapping
 from typing import Any, cast
 
+from neoql.predicates import validate_predicate
 from neoql.schema import DatasetSchema
 
 from .base import BaseDataset
@@ -56,6 +57,7 @@ class TableDataset(BaseDataset):
             return {"status": "success", "inserted": len(neoql["objects"])}
         if action == "update":
             filter_obj = neoql.get("filter")
+            validate_predicate(filter_obj, self.schema)
             updated = self.update(
                 neoql.get("values", {}),
                 where=(
@@ -69,6 +71,7 @@ class TableDataset(BaseDataset):
             raise NotImplementedError("Only 'select' action is supported in query")
         result = self.rows.copy()
         filter_obj = neoql.get("filter")
+        validate_predicate(filter_obj, self.schema)
         if filter_obj:
             result = [row for row in result if self._apply_filter(row, filter_obj)]
         select_fields = neoql.get("select")
