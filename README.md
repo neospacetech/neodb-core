@@ -50,7 +50,7 @@ Install the development toolchain and run all local quality gates:
 python -m pip install -e ".[dev]"
 ruff format --check .
 ruff check .
-mypy cli datasets neoql engine.py storage.py
+mypy cli datasets neoql scripts engine.py storage.py
 coverage run -m unittest discover -v
 coverage report
 python -m build
@@ -59,7 +59,8 @@ python -m build
 Coverage is enforced at 70%. Continuous integration runs the suite on every
 supported Python version and publishes coverage XML plus built distributions as
 workflow artifacts. See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution
-and release workflow, and the
+workflow, [RELEASING.md](RELEASING.md) for trusted releases and TestPyPI dry
+runs, and the
 [NeoDB Core Roadmap](https://github.com/orgs/neospacetech/projects/3) for current
 progress.
 

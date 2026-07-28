@@ -50,7 +50,10 @@ language or storage changes.
 2. Update the version in `pyproject.toml` and document notable changes.
 3. Run every local quality gate and verify CI on all supported Python versions.
 4. Build with `python -m build` and inspect both wheel and source distribution.
-5. Tag the release as `vX.Y.Z` and create GitHub release notes from the milestone.
+5. Tag the release as `vX.Y.Z`; the release workflow validates the version,
+   generates GitHub release notes, attaches distributions, and waits for the
+   protected PyPI approval.
 
-Package publication is intentionally deferred until a registry and release
-credentials are configured.
+Publication uses short-lived OIDC credentials rather than stored registry
+tokens. See [RELEASING.md](RELEASING.md) for registry setup, the TestPyPI dry
+run, production release steps, and failure recovery.
