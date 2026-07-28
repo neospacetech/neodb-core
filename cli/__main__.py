@@ -4,10 +4,18 @@ This module provides a command-line interface for interacting with the NeoDB eng
 """
 
 import json
-import re
 import uuid
 
 from engine import NeoDBEngine
+from neoql.ast import (
+    AddStatement,
+    CreateDatasetStatement,
+    SelectionStatement,
+)
+from neoql.parser import (
+    parse_statement,
+    statement_to_query,
+)
 
 HELP_TEXT = {
     "general": """
@@ -40,59 +48,9 @@ NeoDB CLI - Available commands:
 }
 
 
-def split_top_level(value: str, delimiter: str = ","):
-    """Split text on a delimiter, ignoring quoted and nested occurrences."""
-    parts = []
-    current = []
-    depth = 0
-    quote = None
-    escaped = False
-    for char in value:
-        if escaped:
-            current.append(char)
-            escaped = False
-            continue
-        if char == "\\" and quote:
-            current.append(char)
-            escaped = True
-            continue
-        if char in ('"', "'"):
-            if quote == char:
-                quote = None
-            elif quote is None:
-                quote = char
-            current.append(char)
-            continue
-        if quote is None:
-            if char in "({[":
-                depth += 1
-            elif char in ")}]":
-                depth -= 1
-            if char == delimiter and depth == 0:
-                parts.append("".join(current).strip())
-                current = []
-                continue
-        current.append(char)
-    if current:
-        parts.append("".join(current).strip())
-    return parts
-
-
 def parse_literal(value: str):
-    """Parse a NeoQL scalar literal into its Python representation."""
-    value = value.strip()
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
-        return bytes(value[1:-1], "utf-8").decode("unicode_escape")
-    if re.fullmatch(r"-?\d+", value):
-        return int(value)
-    if re.fullmatch(r"-?(?:\d+\.\d*|\d*\.\d+)", value):
-        return float(value)
-    lowered = value.lower()
-    if lowered in ("true", "false"):
-        return lowered == "true"
-    if lowered in ("null", "none"):
-        return None
-    return value
+    """Parse one scalar using the NeoQL frontend."""
+    return parse_object(f"{{value={value}}}")["value"]
 
 
 def show_help(command=None):
@@ -108,157 +66,64 @@ def show_help(command=None):
 
 
 def parse_schema(schema_str: str):
-    """
-    Parse schema like:
-    id(int, pk), name(str(255)), age(int)
-    Keeps type with inner parentheses (str(255)), constraints only if extra.
-    """
-    schema = {}
-
-    parts = split_top_level(schema_str)
-
-    for field_def in parts:
-        if "(" not in field_def or not field_def.endswith(")"):
-            continue
-        field_name = field_def[: field_def.index("(")].strip()
-        props_str = field_def[field_def.index("(") + 1 : -1].strip()
-
-        props = split_top_level(props_str)
-
-        # First prop is type
-        schema[field_name] = {"type": props[0]}
-        # Extra props are constraints
-        if len(props) > 1:
-            schema[field_name]["constraints"] = props[1:]
-
-    return schema
+    """Parse a field-definition list through the NeoQL frontend."""
+    query = create_dataset(f"create dataset schema(table{{{schema_str}}})")
+    return query["schema"]
 
 
 def parse_object(obj_str: str):
-    """
-    Parse single object like {id=1, name=Alice, age=25}
-    """
-    obj = {}
-    obj_str = obj_str.strip("{} ")
-    for pair in split_top_level(obj_str):
-        key, separator, value = pair.partition("=")
-        if not separator:
-            raise ValueError(f"Invalid record field: {pair}")
-        key = key.strip()
-        obj[key] = parse_literal(value)
-    return obj
+    """Parse one NeoQL record literal."""
+    objects = parse_objects_list(obj_str)
+    if len(objects) != 1:
+        raise ValueError("Expected one record")
+    return objects[0]
 
 
 def parse_objects_list(objs_str: str):
-    """
-    Parse multiple objects separated by commas
-    """
-    objs = []
-    for part in split_top_level(objs_str):
-        if not (part.startswith("{") and part.endswith("}")):
-            raise ValueError(f"Invalid record: {part}")
-        objs.append(parse_object(part))
-    return objs
+    """Parse comma-separated NeoQL record literals."""
+    statement = parse_statement(f"add {objs_str} into records")
+    if not isinstance(statement, AddStatement):
+        raise ValueError("Expected record literals")
+    return statement_to_query(statement)["objects"]
 
 
 def parse_filters(filter_str: str):
-    """
-    Parse filters like {age>20, score>=3.5} or {id=1}
-    Supports &&, ||, comparison operators, and common string operators.
-    """
+    """Parse a NeoQL predicate into the current engine representation."""
     if filter_str is None:
         return None
-    filter_str = filter_str.strip("{} ")
-    if not filter_str:
+    predicate = filter_str.strip()
+    if not predicate.strip("{} "):
         return None
-    or_parts = re.split(r"\s*\|\|\s*", filter_str)
-    if len(or_parts) > 1:
-        return {"or": [parse_filters(part) for part in or_parts]}
-    and_parts = re.split(r"\s*(?:&&|,)\s*", filter_str)
-    if len(and_parts) > 1:
-        return {"and": [parse_filters(part) for part in and_parts]}
-    if filter_str.startswith("!"):
-        return {"not": parse_filters(filter_str[1:].strip())}
-
-    conditions = []
-    for cond in [filter_str]:
-        cond = cond.strip()
-        op_match = re.search(
-            r"\s+(startsWith|endsWith|contains|matches|in)\s+|"
-            r"(<=|>=|!=|=|<|>)",
-            cond,
-        )
-        if op_match:
-            op = (op_match.group(1) or op_match.group(2)).strip()
-            field = cond[: op_match.start()].strip()
-            value = cond[op_match.end() :].strip()
-            field = field.strip()
-            conditions.append({"field": field, "op": op, "value": parse_literal(value)})
-    if not conditions:
-        raise ValueError(f"Invalid predicate: {filter_str}")
-    return conditions[0]
+    if not (predicate.startswith("{") and predicate.endswith("}")):
+        predicate = f"{{{predicate}}}"
+    statement = parse_statement(f"records({predicate})")
+    if not isinstance(statement, SelectionStatement):
+        raise ValueError("Expected predicate")
+    return statement_to_query(statement)["filter"]
 
 
 def create_dataset(cmd: str):
-    """
-    create dataset users(graph)
-    create dataset users(graph{id(int, pk), name(str(255))})
-    """
-    match = re.match(r"create\s+dataset\s+(\w+)\((\w+)(?:\{(.*)\})?\)", cmd, re.I)
-    if not match:
-        raise ValueError("Invalid create dataset syntax")
-    name, dtype, schema_str = match.groups()
-    json_obj = {"action": "create_dataset", "name": name, "type": dtype}
-    if schema_str:
-        json_obj["schema"] = parse_schema(schema_str)
-    return json_obj
+    """Parse a create-dataset statement."""
+    statement = parse_statement(cmd)
+    if not isinstance(statement, CreateDatasetStatement):
+        raise ValueError("Expected create dataset statement")
+    return statement_to_query(statement)
 
 
 def select(cmd: str):
-    """
-    users({id=1, age>20})
-    """
-    match = re.fullmatch(r"(\w+)\((\{.*\})?\)(.*)", cmd.strip(), re.S)
-    if not match:
-        raise ValueError("Invalid select syntax")
-    dataset, filter_str, methods = match.groups()
-    filter_obj = parse_filters(filter_str)
-    query = {"action": "select", "dataset": dataset, "filter": filter_obj}
-    while methods:
-        method = re.match(r"^\s*\.\s*(\w*)\(([^()]*)\)(.*)$", methods, re.S)
-        if not method:
-            raise ValueError(f"Invalid selection method chain: {methods}")
-        name, args, methods = method.groups()
-        args = args.strip()
-        if name == "":
-            query["select"] = [
-                field.strip() for field in args.split(",") if field.strip()
-            ]
-        elif name == "order":
-            order = args.rsplit(maxsplit=1)
-            direction = order[1].lower() if len(order) == 2 else "asc"
-            if direction not in ("asc", "desc"):
-                order, direction = [args], "asc"
-            query.setdefault("order_by", []).append(
-                {"field": order[0], "direction": direction}
-            )
-        elif name in ("limit", "offset"):
-            query[name] = int(args)
-        else:
-            raise ValueError(f"Unsupported selection method '{name}'")
-    return query
+    """Parse a dataset selection."""
+    statement = parse_statement(cmd)
+    if not isinstance(statement, SelectionStatement):
+        raise ValueError("Expected selection statement")
+    return statement_to_query(statement)
 
 
 def add(cmd: str):
-    """
-    add {..}, {..} into users
-    """
-    match = re.match(r"add\s+(.*)\s+into\s+(\w+)", cmd, re.I)
-    if not match:
-        raise ValueError("Invalid add syntax")
-    objs_str, dataset = match.groups()
-    objs = parse_objects_list(objs_str)
-    return {"action": "insert", "dataset": dataset, "objects": objs}
+    """Parse an add-records statement."""
+    statement = parse_statement(cmd)
+    if not isinstance(statement, AddStatement):
+        raise ValueError("Expected add statement")
+    return statement_to_query(statement)
 
 
 def parse_cli_command(cmd: str):
@@ -271,15 +136,10 @@ def parse_cli_command(cmd: str):
         dict: NeoQL query.
     """
     cmd = cmd.strip()
-    if cmd.lower().startswith("create dataset"):
-        return create_dataset(cmd)
-    elif cmd.lower().startswith("add"):
-        return add(cmd)
-    elif cmd.lower().startswith("help"):
+    if cmd.lower().startswith("help"):
         show_help()
         return {}
-    else:
-        return select(cmd)
+    return statement_to_query(parse_statement(cmd))
 
 
 def execute_cli_command(engine: NeoDBEngine, cmd: str, transaction_space=None):

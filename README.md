@@ -40,7 +40,7 @@ Install the development toolchain and run all local quality gates:
 python -m pip install -e ".[dev]"
 ruff format --check .
 ruff check .
-mypy cli datasets engine.py
+mypy cli datasets neoql engine.py
 coverage run -m unittest discover -v
 coverage report
 python -m build
@@ -52,6 +52,21 @@ workflow artifacts. See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution
 and release workflow, and the
 [NeoDB Core Roadmap](https://github.com/orgs/neospacetech/projects/3) for current
 progress.
+
+## Language frontend
+
+NeoQL source is tokenized and parsed independently of the CLI:
+
+```python
+from neoql import parse_statement
+
+statement = parse_statement("users({age>=18}).(name, age).limit(20)")
+```
+
+The returned typed AST is immutable and every node carries a source span with
+line and column positions. Syntax errors use those spans to render a precise
+diagnostic and source caret. The current engine adapter converts supported AST
+statements into the MVP execution contract while the lazy planner is developed.
 
 ## Roadmap
 

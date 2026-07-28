@@ -43,7 +43,7 @@ Roadmap = "https://github.com/orgs/neospacetech/projects/3"
 py-modules = ["engine"]
 
 [tool.setuptools.packages.find]
-include = ["cli*", "datasets*"]
+include = ["cli*", "datasets*", "neoql*"]
 
 [tool.ruff]
 line-length = 88
@@ -65,7 +65,7 @@ warn_unused_configs = true
 
 [tool.coverage.run]
 branch = true
-source = ["cli", "datasets", "engine"]
+source = ["cli", "datasets", "engine", "neoql"]
 
 [tool.coverage.report]
 exclude_also = [
