@@ -366,19 +366,27 @@ Links are first-class records.
 Every Selection exposes composable methods that return another Selection:
 
 ```neoql
-.where()
-.order()
+.where({active=true})
+.order(name asc)
 .limit()
 .offset()
 .unique()
 .traverse()
 .group()
-.sort()
+.sort(name)
 .reverse()
-.flatten()
-.expand()
+.flatten(tags)
+.expand(profile)
 .distinct()
 ```
+
+`unique()` and `distinct()` remove duplicate records while preserving the
+first occurrence; passing fields deduplicates by those fields. `sort` is a
+single-direction convenience for `order`, and `reverse` reverses the current
+result. `flatten(field)` emits one record per collection item and replaces the
+collection with that item. `expand(field)` removes an object field and merges
+its members into the parent; collisions are schema errors. All methods append
+lazy immutable plan nodes.
 
 ## 16. Traversal
 
@@ -415,6 +423,14 @@ employees = users({role="Engineer"})
 | Difference | `A - B` |
 | Symmetric difference | `A ^ B` |
 | Cartesian product | `A * B` |
+
+Union, intersection, difference, and symmetric difference require identical
+field sets. They use structural record equality, return distinct records, and
+preserve stable left-then-right order where applicable. Empty Selections are
+compatible with any schema. Cartesian product preserves input multiplicity
+and emits `{left: <record>, right: <record>}` so overlapping field names are
+unambiguous. Algebra operators are lazy and do not consume either operand
+until their result is consumed.
 
 The operators `÷`, `×`, `⊂`, and `⊃` may receive symbolic aliases in a future
 version.

@@ -6,7 +6,7 @@ from functools import partial
 from types import MappingProxyType
 from typing import Any, TypeAlias, overload
 
-from .errors import EngineError
+from .errors import EngineError, UnknownFieldError
 from .predicates import evaluate_predicate
 
 
@@ -35,7 +35,44 @@ class LimitPlan:
     count: int
 
 
-PlanNode: TypeAlias = FilterPlan | ProjectionPlan | OrderPlan | OffsetPlan | LimitPlan
+@dataclass(frozen=True, slots=True)
+class UniquePlan:
+    fields: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ReversePlan:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class FlattenPlan:
+    field: str
+
+
+@dataclass(frozen=True, slots=True)
+class ExpandPlan:
+    field: str
+
+
+@dataclass(frozen=True, slots=True)
+class AlgebraPlan:
+    operation: str
+    other: "Selection"
+
+
+PlanNode: TypeAlias = (
+    FilterPlan
+    | ProjectionPlan
+    | OrderPlan
+    | OffsetPlan
+    | LimitPlan
+    | UniquePlan
+    | ReversePlan
+    | FlattenPlan
+    | ExpandPlan
+    | AlgebraPlan
+)
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -91,6 +128,40 @@ class Selection(Sequence[dict[str, Any]]):
             )
         return self._append(OrderPlan(normalized))
 
+    def sort(self, *fields: str, reverse: bool = False) -> "Selection":
+        direction = "desc" if reverse else "asc"
+        return self.order(*((field, direction) for field in fields))
+
+    def reverse(self) -> "Selection":
+        return self._append(ReversePlan())
+
+    def unique(self, *fields: str) -> "Selection":
+        return self._append(UniquePlan(tuple(fields)))
+
+    def distinct(self, *fields: str) -> "Selection":
+        return self.unique(*fields)
+
+    def flatten(self, field: str) -> "Selection":
+        return self._append(FlattenPlan(field))
+
+    def expand(self, field: str) -> "Selection":
+        return self._append(ExpandPlan(field))
+
+    def union(self, other: "Selection") -> "Selection":
+        return self._algebra("union", other)
+
+    def intersection(self, other: "Selection") -> "Selection":
+        return self._algebra("intersection", other)
+
+    def difference(self, other: "Selection") -> "Selection":
+        return self._algebra("difference", other)
+
+    def symmetric_difference(self, other: "Selection") -> "Selection":
+        return self._algebra("symmetric_difference", other)
+
+    def product(self, other: "Selection") -> "Selection":
+        return self._algebra("product", other)
+
     def offset(self, count: int) -> "Selection":
         if count < 0:
             raise EngineError(
@@ -133,12 +204,144 @@ class Selection(Sequence[dict[str, Any]]):
                     )
             elif isinstance(node, OffsetPlan):
                 result = result[node.count :]
-            else:
+            elif isinstance(node, LimitPlan):
                 result = result[: node.count]
+            elif isinstance(node, UniquePlan):
+                for field in node.fields:
+                    if any(field not in record for record in result):
+                        raise UnknownFieldError(self.dataset, field)
+                result = _unique_records(result, node.fields)
+            elif isinstance(node, ReversePlan):
+                result = list(reversed(result))
+            elif isinstance(node, FlattenPlan):
+                result = self._flatten(result, node.field)
+            elif isinstance(node, ExpandPlan):
+                result = self._expand(result, node.field)
+            else:
+                result = self._apply_algebra(result, node)
         return result
 
     def _append(self, node: PlanNode) -> "Selection":
         return Selection(self._source, (*self._plan, node))
+
+    def _algebra(self, operation: str, other: "Selection") -> "Selection":
+        if not isinstance(other, Selection):
+            raise EngineError(
+                "invalid_plan",
+                "Selection algebra requires another Selection",
+                phase="plan",
+            )
+        return self._append(AlgebraPlan(operation, other))
+
+    def _apply_algebra(
+        self,
+        left: list[dict[str, Any]],
+        node: AlgebraPlan,
+    ) -> list[dict[str, Any]]:
+        right = node.other.consume()
+        if node.operation == "product":
+            return [
+                {"left": dict(left_record), "right": dict(right_record)}
+                for left_record in left
+                for right_record in right
+            ]
+        _validate_compatible_schemas(left, right)
+        left_unique = _unique_records(left)
+        right_unique = _unique_records(right)
+        left_keys = {_record_key(record) for record in left_unique}
+        right_keys = {_record_key(record) for record in right_unique}
+        if node.operation == "union":
+            return _unique_records([*left_unique, *right_unique])
+        if node.operation == "intersection":
+            return [
+                record for record in left_unique if _record_key(record) in right_keys
+            ]
+        if node.operation == "difference":
+            return [
+                record
+                for record in left_unique
+                if _record_key(record) not in right_keys
+            ]
+        return [
+            *(
+                record
+                for record in left_unique
+                if _record_key(record) not in right_keys
+            ),
+            *(
+                record
+                for record in right_unique
+                if _record_key(record) not in left_keys
+            ),
+        ]
+
+    def _flatten(
+        self,
+        records: list[dict[str, Any]],
+        field: str,
+    ) -> list[dict[str, Any]]:
+        flattened = []
+        for record in records:
+            if field not in record:
+                raise UnknownFieldError(self.dataset, field)
+            value = record[field]
+            if not isinstance(value, (list, tuple, set, frozenset)):
+                raise EngineError(
+                    "type_mismatch",
+                    f"flatten requires collection field '{field}'",
+                    details={"dataset": self.dataset, "field": field},
+                )
+            values = (
+                sorted(value, key=repr)
+                if isinstance(value, (set, frozenset))
+                else value
+            )
+            for item in values:
+                flattened.append({**record, field: item})
+        return flattened
+
+    def _expand(
+        self,
+        records: list[dict[str, Any]],
+        field: str,
+    ) -> list[dict[str, Any]]:
+        expanded = []
+        for record in records:
+            if field not in record:
+                raise UnknownFieldError(self.dataset, field)
+            value = record[field]
+            if not isinstance(value, Mapping):
+                raise EngineError(
+                    "type_mismatch",
+                    f"expand requires object field '{field}'",
+                    details={"dataset": self.dataset, "field": field},
+                )
+            parent = {key: item for key, item in record.items() if key != field}
+            collisions = sorted(set(parent) & set(value))
+            if collisions:
+                raise EngineError(
+                    "schema_mismatch",
+                    f"Expanded field '{field}' would overwrite fields",
+                    phase="plan",
+                    details={"dataset": self.dataset, "fields": collisions},
+                )
+            expanded.append({**parent, **value})
+        return expanded
+
+    def __add__(self, other: "Selection") -> "Selection":
+        return self.union(other)
+
+    def __and__(self, other: "Selection") -> "Selection":
+        return self.intersection(other)
+
+    def __sub__(self, other: "Selection") -> "Selection":
+        return self.difference(other)
+
+    def __xor__(self, other: "Selection") -> "Selection":
+        return self.symmetric_difference(other)
+
+    def __mul__(self, other: "Selection") -> "Selection":
+        return self.product(other)
 
     def __iter__(self) -> Iterator[dict[str, Any]]:
         return iter(self.consume())
@@ -184,3 +387,67 @@ def _freeze(value: Any) -> Any:
 
 def _record_value(record: Mapping[str, Any], *, field: str) -> Any:
     return record.get(field)
+
+
+def _unique_records(
+    records: list[dict[str, Any]],
+    fields: tuple[str, ...] = (),
+) -> list[dict[str, Any]]:
+    unique = []
+    seen = set()
+    for record in records:
+        key = (
+            tuple(_value_key(record.get(field)) for field in fields)
+            if fields
+            else _record_key(record)
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(record)
+    return unique
+
+
+def _record_key(record: Mapping[str, Any]) -> Any:
+    return tuple(
+        (key, _value_key(value))
+        for key, value in sorted(record.items(), key=lambda item: item[0])
+    )
+
+
+def _value_key(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return _record_key(value)
+    if isinstance(value, (list, tuple)):
+        return tuple(_value_key(item) for item in value)
+    if isinstance(value, (set, frozenset)):
+        return frozenset(_value_key(item) for item in value)
+    try:
+        hash(value)
+    except TypeError:
+        return repr(value)
+    return value
+
+
+def _validate_compatible_schemas(
+    left: list[dict[str, Any]],
+    right: list[dict[str, Any]],
+) -> None:
+    left_schemas = {frozenset(record) for record in left}
+    right_schemas = {frozenset(record) for record in right}
+    if len(left_schemas) > 1 or len(right_schemas) > 1:
+        raise EngineError(
+            "schema_mismatch",
+            "Selection contains records with inconsistent schemas",
+            phase="plan",
+        )
+    if left_schemas and right_schemas and left_schemas != right_schemas:
+        raise EngineError(
+            "schema_mismatch",
+            "Selection algebra requires identical field schemas",
+            phase="plan",
+            details={
+                "left": sorted(next(iter(left_schemas))),
+                "right": sorted(next(iter(right_schemas))),
+            },
+        )

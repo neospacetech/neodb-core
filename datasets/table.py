@@ -1,10 +1,19 @@
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
-from neoql.errors import UnknownFieldError
+from neoql.errors import EngineError, UnknownFieldError
 from neoql.predicates import validate_predicate
 from neoql.schema import DatasetSchema
-from neoql.selection import FilterPlan, OrderPlan, ProjectionPlan, Selection
+from neoql.selection import (
+    ExpandPlan,
+    FilterPlan,
+    FlattenPlan,
+    OrderPlan,
+    ProjectionPlan,
+    Selection,
+    UniquePlan,
+)
+from neoql.types import TypeKind
 
 from .base import BaseDataset
 
@@ -84,6 +93,33 @@ class TableDataset(BaseDataset):
                 self._validate_query_fields(node.fields)
             elif isinstance(node, OrderPlan):
                 self._validate_query_fields(field for field, _direction in node.fields)
+            elif isinstance(node, UniquePlan) and node.fields:
+                self._validate_query_fields(node.fields)
+            elif isinstance(node, FlattenPlan):
+                self._validate_query_fields((node.field,))
+                if self.schema.fields[node.field].type.kind not in {
+                    TypeKind.LIST,
+                    TypeKind.SET,
+                    TypeKind.TUPLE,
+                }:
+                    raise EngineError(
+                        "type_mismatch",
+                        f"flatten requires collection field '{node.field}'",
+                        phase="plan",
+                        details={"dataset": self.name, "field": node.field},
+                    )
+            elif isinstance(node, ExpandPlan):
+                self._validate_query_fields((node.field,))
+                if self.schema.fields[node.field].type.kind not in {
+                    TypeKind.MAP,
+                    TypeKind.JSON,
+                }:
+                    raise EngineError(
+                        "type_mismatch",
+                        f"expand requires object field '{node.field}'",
+                        phase="plan",
+                        details={"dataset": self.name, "field": node.field},
+                    )
 
     def _validate_query_fields(self, fields: Iterable[str]) -> None:
         for field in fields:

@@ -37,13 +37,18 @@ from .schema import (
     SchemaDefinitionError,
 )
 from .selection import (
+    AlgebraPlan,
+    ExpandPlan,
     FilterPlan,
+    FlattenPlan,
     LimitPlan,
     OffsetPlan,
     OrderPlan,
     PlanNode,
     ProjectionPlan,
+    ReversePlan,
     Selection,
+    UniquePlan,
 )
 from .types import (
     NeoQLTypeError,
@@ -57,6 +62,7 @@ from .types import (
 
 __all__ = [
     "AddStatement",
+    "AlgebraPlan",
     "CreateDatasetStatement",
     "ConstraintViolation",
     "DatasetAlreadyExistsError",
@@ -65,8 +71,10 @@ __all__ = [
     "DeadlockError",
     "DiagnosticError",
     "EngineError",
+    "ExpandPlan",
     "FieldSchema",
     "FilterPlan",
+    "FlattenPlan",
     "IndexMetadata",
     "InvalidTraversalError",
     "Lexer",
@@ -81,6 +89,7 @@ __all__ = [
     "PredicateEvaluationError",
     "ProjectionPlan",
     "QueryTimeoutError",
+    "ReversePlan",
     "SelectionStatement",
     "SchemaDefinitionError",
     "Selection",
@@ -91,6 +100,7 @@ __all__ = [
     "TypeKind",
     "UnknownFieldError",
     "UnsupportedDatasetError",
+    "UniquePlan",
     "cast_value",
     "evaluate_operator",
     "evaluate_predicate",
