@@ -118,14 +118,14 @@ class ParserASTTests(unittest.TestCase):
         self.assertEqual(order.arguments, ("age", "desc"))
 
     def test_parser_accepts_future_method_calls_without_cli_coupling(self):
-        statement = parse_statement("users().traverse(friends, 2)")
+        statement = parse_statement("users().future(friends, 2)")
         self.assertIsInstance(statement, SelectionStatement)
         assert isinstance(statement, SelectionStatement)
         self.assertEqual(
             statement.operations[0],
             MethodCall(
                 statement.operations[0].span,
-                "traverse",
+                "future",
                 ("friends", statement.operations[0].arguments[1]),
             ),
         )

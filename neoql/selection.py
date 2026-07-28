@@ -10,7 +10,7 @@ from types import MappingProxyType
 from typing import Any, TypeAlias, overload
 
 from .ast import Span
-from .errors import EngineError, UnknownFieldError
+from .errors import EngineError, InvalidTraversalError, UnknownFieldError
 from .predicates import evaluate_predicate
 
 
@@ -78,6 +78,7 @@ class SimilarityPlan:
 class TraversalPlan:
     label: str
     depth: int
+    predicate: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,6 +165,7 @@ class Selection:
                     selection = selection.traverse(
                         item["label"],
                         depth=item["depth"],
+                        predicate=item.get("predicate"),
                     )
             return selection
         similarity = query.get("similarity")
@@ -178,6 +180,7 @@ class Selection:
             selection = selection.traverse(
                 traversal["label"],
                 depth=traversal.get("depth", 1),
+                predicate=traversal.get("predicate"),
             )
         fields = query.get("select")
         if fields:
@@ -272,15 +275,33 @@ class Selection:
     ) -> "Selection":
         return self.similarity(field, vector, metric=metric)
 
-    def traverse(self, label: str, *, depth: int = 1) -> "Selection":
-        if not isinstance(label, str) or not label or depth < 1:
-            raise EngineError(
-                "invalid_traversal",
+    def traverse(
+        self,
+        label: str,
+        *,
+        depth: int = 1,
+        predicate: Mapping[str, Any] | None = None,
+    ) -> "Selection":
+        if (
+            not isinstance(label, str)
+            or not label
+            or isinstance(depth, bool)
+            or not isinstance(depth, int)
+            or depth < 1
+            or (predicate is not None and not isinstance(predicate, Mapping))
+        ):
+            raise InvalidTraversalError(
                 "Traversal requires a relationship label and positive depth",
-                phase="plan",
-                details={"label": label, "depth": depth},
+                label=label,
+                depth=depth,
             )
-        return self._append(TraversalPlan(label, depth))
+        datasets = _selection_datasets(self)
+        if len(datasets) > 1:
+            raise InvalidTraversalError(
+                "Traversal source must belong to one graph dataset",
+                datasets=sorted(datasets),
+            )
+        return self._append(TraversalPlan(label, depth, predicate))
 
     def group(self, field: str) -> "GroupedSelection":
         return GroupedSelection(self, field)
@@ -395,6 +416,7 @@ class Selection:
                     result,
                     node.label,
                     node.depth,
+                    node.predicate,
                 )
             else:
                 result = self._apply_algebra(result, node)
@@ -828,6 +850,14 @@ def _record_key(record: Mapping[str, Any]) -> Any:
         (key, _value_key(value))
         for key, value in sorted(record.items(), key=lambda item: item[0])
     )
+
+
+def _selection_datasets(selection: Selection) -> set[str]:
+    datasets = {selection.dataset}
+    for node in selection.plan:
+        if isinstance(node, AlgebraPlan):
+            datasets.update(_selection_datasets(node.other))
+    return datasets
 
 
 def _value_key(value: Any) -> Any:

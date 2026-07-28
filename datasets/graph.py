@@ -1,7 +1,8 @@
 from collections.abc import Mapping
 from typing import Any
 
-from neoql.errors import InvalidTraversalError
+from neoql.errors import InvalidTraversalError, UnknownFieldError
+from neoql.predicates import evaluate_predicate
 from neoql.selection import Selection, TraversalPlan
 
 from .base import BaseDataset
@@ -75,6 +76,7 @@ class GraphDataset(BaseDataset):
         records: list[dict[str, Any]],
         label: str,
         depth: int,
+        predicate: Mapping[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         frontier = [record.get("id") for record in records]
         if any(node_id not in self.nodes for node_id in frontier):
@@ -84,12 +86,26 @@ class GraphDataset(BaseDataset):
             )
         visited = set(frontier)
         result = []
+        relationship_fields = {
+            field
+            for edge in self.edges
+            if edge["label"] == label
+            for field in edge["data"]
+        }
+        for field in _predicate_fields(predicate):
+            if field not in relationship_fields:
+                raise UnknownFieldError(f"{self.name}.{label}", field)
         for _level in range(depth):
             next_frontier = []
             for node_id in frontier:
                 for edge in self.edges:
                     neighbor = None
                     if edge["label"] != label:
+                        continue
+                    relationship = {
+                        field: edge["data"].get(field) for field in relationship_fields
+                    }
+                    if not evaluate_predicate(relationship, predicate):
                         continue
                     if edge["source"] == node_id:
                         neighbor = edge["target"]
@@ -113,3 +129,21 @@ class GraphDataset(BaseDataset):
 
     # Helper for filter logic
     storage_type = "graph"
+
+
+def _predicate_fields(predicate: Mapping[str, Any] | None) -> set[str]:
+    if not predicate:
+        return set()
+    if "field" in predicate:
+        return {str(predicate["field"])}
+    fields = set()
+    for operator in ("and", "or"):
+        operands = predicate.get(operator, ())
+        if isinstance(operands, list):
+            for operand in operands:
+                if isinstance(operand, Mapping):
+                    fields.update(_predicate_fields(operand))
+    negated = predicate.get("not")
+    if isinstance(negated, Mapping):
+        fields.update(_predicate_fields(negated))
+    return fields

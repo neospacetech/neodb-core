@@ -482,23 +482,33 @@ lazy immutable plan nodes.
 General form:
 
 ```neoql
-selection.traverse(relationship(), depth=2)
+selection.traverse(relationship({link_property=true}), depth=2)
 ```
 
 Example:
 
 ```neoql
 users({id=1}).traverse(
-    friend,
-    3
-)
+    friend({active=true && since>=2024}),
+    depth=3
+).where({verified=true})
 ```
 
-Traversal follows matching labels breadth-first, excludes the starting nodes,
+The relationship name matches the link `label`; its optional predicate filters
+the custom fields stored in link `data`. A field that has never appeared on a
+link with that label raises `unknown_field`; a known field omitted by a
+particular link is treated as `null`. A following `where()` filters target
+node fields, so link filtering and node filtering remain separate.
+
+Traversal follows matching links breadth-first, excludes the starting nodes,
 and never emits a node twice, so cycles are safe. Directed links follow source
-to target; bidirectional links can be followed from either endpoint. Depth
-must be positive and defaults to one. The returned value is a lazy Selection,
-so normal filters and transforms can be appended before it is consumed.
+to target; bidirectional links can be followed from either endpoint. `depth`
+must be a positive integer and defaults to one. A traversal source must belong
+to one graph dataset. The legacy `traverse(friend, 3)` spelling remains
+accepted.
+
+The returned value is a lazy Selection, so normal filters and transforms can
+be appended before it is consumed.
 
 ## 18. Variables
 

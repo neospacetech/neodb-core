@@ -151,7 +151,21 @@ class WhereOperation(Node):
     predicate: Predicate
 
 
-SelectionOperation: TypeAlias = Projection | MethodCall | WhereOperation
+@dataclass(frozen=True, slots=True)
+class RelationshipExpression(Node):
+    label: str
+    predicate: Predicate | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class TraversalOperation(Node):
+    relationship: RelationshipExpression
+    depth: int = 1
+
+
+SelectionOperation: TypeAlias = (
+    Projection | MethodCall | WhereOperation | TraversalOperation
+)
 
 
 @dataclass(frozen=True, slots=True)

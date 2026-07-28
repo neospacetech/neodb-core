@@ -44,6 +44,7 @@ class BaseDataset(ABC):
         records: list[dict[str, Any]],
         label: str,
         depth: int,
+        predicate: Mapping[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         raise InvalidTraversalError(
             "Traversal requires a graph dataset",

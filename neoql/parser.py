@@ -29,12 +29,14 @@ from .ast import (
     ProjectionField,
     RecordField,
     RecordLiteral,
+    RelationshipExpression,
     SelectionOperation,
     SelectionPipelineExpression,
     SelectionStatement,
     SelectionValue,
     Span,
     Statement,
+    TraversalOperation,
     TypeRef,
     UpdateStatement,
     Value,
@@ -190,6 +192,11 @@ class Parser:
             operation: SelectionOperation
             if self._check(TokenKind.LEFT_PAREN):
                 operation = self._projection()
+            elif (
+                self._check(TokenKind.IDENTIFIER)
+                and self._peek().lexeme.lower() == "traverse"
+            ):
+                operation = self._traversal_operation()
             else:
                 operation = self._method_call()
             operations.append(operation)
@@ -484,6 +491,11 @@ class Parser:
             operation: SelectionOperation
             if self._check(TokenKind.LEFT_PAREN):
                 operation = self._projection()
+            elif (
+                self._check(TokenKind.IDENTIFIER)
+                and self._peek().lexeme.lower() == "traverse"
+            ):
+                operation = self._traversal_operation()
             else:
                 operation = self._method_call()
             operations.append(operation)
@@ -568,6 +580,59 @@ class Parser:
                 arguments.append(self._method_argument())
         end = self._consume(TokenKind.RIGHT_PAREN, "Expected ')' after method")
         return MethodCall(self._span(name, end), name.lexeme, tuple(arguments))
+
+    def _traversal_operation(self) -> TraversalOperation:
+        start = self._consume(TokenKind.IDENTIFIER, "Expected traverse")
+        self._consume(TokenKind.LEFT_PAREN, "Expected '(' after traverse")
+        label = self._consume(
+            TokenKind.IDENTIFIER,
+            "traverse() expects a relationship label",
+        )
+        predicate = None
+        relationship_end = label
+        if self._match(TokenKind.LEFT_PAREN):
+            if self._match(TokenKind.LEFT_BRACE):
+                if not self._check(TokenKind.RIGHT_BRACE):
+                    predicate = self._predicate()
+                self._consume(
+                    TokenKind.RIGHT_BRACE,
+                    "Expected '}' after relationship predicate",
+                )
+            relationship_end = self._consume(
+                TokenKind.RIGHT_PAREN,
+                "Expected ')' after relationship",
+            )
+        relationship = RelationshipExpression(
+            self._span(label, relationship_end),
+            label.lexeme,
+            predicate,
+        )
+        depth = 1
+        if self._match(TokenKind.COMMA):
+            if (
+                self._check(TokenKind.IDENTIFIER)
+                and self._peek().lexeme.lower() == "depth"
+            ):
+                self._advance()
+                self._consume(TokenKind.EQUAL, "Expected '=' after depth")
+            depth_value = self._value()
+            if (
+                not isinstance(depth_value, Literal)
+                or isinstance(depth_value.value, bool)
+                or not isinstance(depth_value.value, int)
+                or depth_value.value < 1
+            ):
+                self._error(
+                    self._previous(),
+                    "Traversal depth must be a positive integer",
+                )
+            depth = depth_value.value
+        end = self._consume(TokenKind.RIGHT_PAREN, "Expected ')' after traverse")
+        return TraversalOperation(
+            self._span(start, end),
+            relationship,
+            depth,
+        )
 
     def _method_argument(self) -> Value | str:
         if self._check(TokenKind.IDENTIFIER) and not self._check_next(
@@ -1053,6 +1118,28 @@ def statement_to_query(
                     ),
                 }
             )
+            extended_pipeline = True
+            continue
+        if isinstance(operation, TraversalOperation):
+            if grouping:
+                raise NeoQLSyntaxError(
+                    "Only an aggregation may follow group()",
+                    operation.span,
+                    "",
+                )
+            traversal: dict[str, Any] = {
+                "label": operation.relationship.label,
+                "depth": operation.depth,
+            }
+            relationship_predicate = _predicate_to_query(
+                operation.relationship.predicate,
+                bindings,
+                selection_resolver,
+            )
+            if relationship_predicate is not None:
+                traversal["predicate"] = relationship_predicate
+            query["traverse"] = traversal
+            pipeline.append({"operation": "traverse", **traversal})
             extended_pipeline = True
             continue
         arguments = tuple(
