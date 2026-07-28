@@ -146,4 +146,23 @@ class SelectionStatement(Node):
     operations: tuple[SelectionOperation, ...] = ()
 
 
-Statement: TypeAlias = CreateDatasetStatement | AddStatement | SelectionStatement
+@dataclass(frozen=True, slots=True)
+class UpdateStatement(Node):
+    dataset: str
+    predicate: Predicate | None
+    values: RecordLiteral
+
+
+@dataclass(frozen=True, slots=True)
+class DeleteStatement(Node):
+    dataset: str
+    predicate: Predicate | None
+
+
+Statement: TypeAlias = (
+    CreateDatasetStatement
+    | AddStatement
+    | SelectionStatement
+    | UpdateStatement
+    | DeleteStatement
+)

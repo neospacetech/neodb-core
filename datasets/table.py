@@ -78,8 +78,21 @@ class TableDataset(BaseDataset):
                 ),
             )
             return {"status": "success", "updated": updated}
+        if action == "delete":
+            filter_obj = neoql.get("filter")
+            validate_predicate(filter_obj, self.schema)
+            deleted = self.delete(
+                where=(
+                    lambda row: (
+                        self._apply_filter(row, filter_obj) if filter_obj else True
+                    )
+                )
+            )
+            return {"status": "success", "deleted": deleted}
         if action != "select":
-            raise NotImplementedError("Only 'select' action is supported in query")
+            raise NotImplementedError(
+                "Only 'select', 'update', and 'delete' actions are supported in query"
+            )
         return self._select(neoql)
 
     def _selection_records(self):
@@ -126,5 +139,13 @@ class TableDataset(BaseDataset):
             if field not in self.schema.fields:
                 raise UnknownFieldError(self.name, field)
 
-    def delete(self, where):
-        self.rows = [row for row in self.rows if not where(row)]
+    def delete(
+        self,
+        where: Callable[[Mapping[str, Any]], bool] | None = None,
+    ) -> int:
+        predicate = where or (lambda _row: True)
+        remaining = [row for row in self.rows if not predicate(row)]
+        deleted = len(self.rows) - len(remaining)
+        self.schema.validate_records(remaining)
+        self.rows = remaining
+        return deleted

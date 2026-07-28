@@ -218,6 +218,18 @@ class ReferenceConflictError(EngineError):
         )
 
 
+class ReferenceInUseError(EngineError):
+    def __init__(self, dataset: str, source_dataset: str):
+        super().__init__(
+            "reference_in_use",
+            f"Cannot mutate referenced identity in dataset '{dataset}'",
+            details={
+                "dataset": dataset,
+                "source_dataset": source_dataset,
+            },
+        )
+
+
 class QueryTimeoutError(EngineError):
     def __init__(self, timeout_ms: int):
         super().__init__(

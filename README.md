@@ -325,7 +325,33 @@ add {id=1, name="Alice"} into users
 add users() into archive
 ```
 
-## 12. References
+## 12. Update and delete
+
+Mutations are terminal operations on a dataset Selection:
+
+```neoql
+users({id=1}).update({name="Alice", active=true})
+users({inactive=true}).delete()
+```
+
+The predicate determines the affected records. An empty match succeeds with an
+affected count of zero. An invocation without a predicate targets the full
+dataset:
+
+```neoql
+sessions().delete()
+```
+
+`update` returns `{status="success", updated=<count>}` and `delete` returns
+`{status="success", deleted=<count>}` at the engine boundary. Update values are
+schema-normalized and enforce unknown-field, nullability, readonly, uniqueness,
+and reference constraints. Each mutation is atomic, including inline reference
+resolution, and an error rolls back the entire active transaction. Mutation
+operations must directly follow dataset invocation and cannot be followed by
+another Selection method. Deleting a referenced record, or changing identity
+fields used by an existing reference, fails with `reference_in_use`.
+
+## 13. References
 
 Selections are valid values:
 
@@ -342,7 +368,7 @@ set(
 )
 ```
 
-## 13. Automatic resolution
+## 14. Automatic resolution
 
 When an inline object is assigned to a reference:
 
@@ -371,7 +397,7 @@ use the stable diagnostic codes `missing_reference`, `ambiguous_reference`,
 `reference_conflict`, and `reference_cycle`. If source validation fails after
 an inline insert, the destination insert is rolled back.
 
-## 14. Graph links
+## 15. Graph links
 
 ```neoql
 add link(
@@ -386,7 +412,7 @@ users({id=2})
 
 Links are first-class records.
 
-## 15. Selection methods
+## 16. Selection methods
 
 Every Selection exposes composable methods that return another Selection:
 
@@ -413,7 +439,7 @@ collection with that item. `expand(field)` removes an object field and merges
 its members into the parent; collisions are schema errors. All methods append
 lazy immutable plan nodes.
 
-## 16. Traversal
+## 17. Traversal
 
 General form:
 
@@ -430,7 +456,7 @@ users({id=1}).traverse(
 )
 ```
 
-## 17. Variables
+## 18. Variables
 
 Selections can be assigned to immutable, lazy variables:
 
@@ -439,7 +465,7 @@ adults = users({age>=18})
 employees = users({role="Engineer"})
 ```
 
-## 18. Selection algebra
+## 19. Selection algebra
 
 | Operation | Syntax |
 | --- | --- |
@@ -460,7 +486,7 @@ until their result is consumed.
 The operators `÷`, `×`, `⊂`, and `⊃` may receive symbolic aliases in a future
 version.
 
-## 19. Aggregations
+## 20. Aggregations
 
 ```neoql
 users().count()
@@ -472,7 +498,7 @@ users().median(age)
 users().std(age)
 ```
 
-## 20. Grouping
+## 21. Grouping
 
 `group` returns a grouped Selection, which can be aggregated:
 
@@ -481,7 +507,7 @@ users().group(country)
 users().group(country).count()
 ```
 
-## 21. Ordering
+## 22. Ordering
 
 ```neoql
 .order(age)
@@ -489,14 +515,14 @@ users().group(country).count()
 .order(name asc)
 ```
 
-## 22. Pagination
+## 23. Pagination
 
 ```neoql
 .limit(20)
 .offset(40)
 ```
 
-## 23. Pattern matching
+## 24. Pattern matching
 
 Future syntax:
 
@@ -510,12 +536,12 @@ users().match(
 
 The graph planner may optimize matching automatically.
 
-## 24. Type inference
+## 25. Type inference
 
 NeoQL infers references, literals, datasets, graph edges, and collection types
 where possible. Explicit casting remains available.
 
-## 25. Transactions
+## 26. Transactions
 
 ```neoql
 begin
@@ -542,7 +568,7 @@ keeps selections created before `begin` isolated from staged writes. A
 `transaction{...}` block and an engine `batch` are implicit atomic
 transactions, so a failed constraint cannot leave earlier mutations applied.
 
-## 26. Functions
+## 27. Functions
 
 Built-in functions:
 
@@ -568,7 +594,7 @@ function fullName(first, last){
 }
 ```
 
-## 27. Lazy execution
+## 28. Lazy execution
 
 Every statement builds an execution plan. Execution occurs when a client
 consumes results, a mutation occurs, or an API returns. This allows NeoDB to
@@ -588,7 +614,7 @@ refined = selection.where({"field": "active", "op": "=", "value": True})
 records = refined.consume()
 ```
 
-## 28. Optimizer rules
+## 29. Optimizer rules
 
 NeoDB may reorder operations while preserving semantics, including:
 
@@ -598,7 +624,7 @@ NeoDB may reorder operations while preserving semantics, including:
 - Join elimination
 - Graph and vector pruning
 
-## 29. Error handling
+## 30. Error handling
 
 Compile-time errors include unknown datasets or fields, type mismatches, and
 invalid traversals. Runtime errors include constraint violations, permission
@@ -628,7 +654,7 @@ Constraint and predicate diagnostics use more specific stable codes such as
 `invalid_operand`, and `invalid_pattern`. Callers should branch on `code` and
 treat the human-readable `message` as display text.
 
-## 30. Language goals
+## 31. Language goals
 
 NeoQL should be:
 
@@ -639,7 +665,7 @@ NeoQL should be:
 - **Optimizable:** developers describe what they want, and NeoDB decides how
   to execute it efficiently.
 
-## 31. Complete example
+## 32. Complete example
 
 ```neoql
 employees =

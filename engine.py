@@ -18,8 +18,10 @@ from neoql.errors import (
     MissingReferenceError,
     ReferenceConflictError,
     ReferenceCycleError,
+    ReferenceInUseError,
     UnsupportedDatasetError,
 )
+from neoql.predicates import validate_predicate
 from neoql.references import ReferenceValue
 from neoql.types import TypeDescriptor, TypeKind, cast_value
 
@@ -179,7 +181,9 @@ class NeoDBEngine:
         dataset = self.datasets.get(query["dataset"])
         if not dataset:
             raise DatasetNotFoundError(query["dataset"])
-        return dataset.query(self._resolve_query_references(dataset, query))
+        prepared = self._resolve_query_references(dataset, query)
+        self._validate_mutation_references(dataset, prepared)
+        return dataset.query(prepared)
 
     def _execute_transaction(
         self,
@@ -213,6 +217,78 @@ class NeoDBEngine:
                     raise DatasetNotFoundError(target_name)
                 if isinstance(target, TableDataset) and not _identity_fields(target):
                     raise AmbiguousReferenceError(target_name, "no identity constraint")
+
+    def _validate_mutation_references(
+        self,
+        dataset: Any,
+        query: Mapping[str, Any],
+    ) -> None:
+        if not isinstance(dataset, TableDataset):
+            return
+        action = query.get("action")
+        if action not in {"update", "delete"}:
+            return
+        filter_obj = query.get("filter")
+        validate_predicate(filter_obj, dataset.schema)
+        affected = [
+            record
+            for record in dataset.rows
+            if not filter_obj or dataset._apply_filter(record, filter_obj)
+        ]
+        if not affected:
+            return
+        inbound = self._inbound_references(
+            dataset,
+            affected,
+            ignore_affected_sources=action == "delete",
+        )
+        if action == "delete" and inbound:
+            source_dataset, _reference, _record = inbound[0]
+            raise ReferenceInUseError(dataset.name, source_dataset)
+        if action == "update":
+            changes = query.get("values", {})
+            for source_dataset, reference, record in inbound:
+                normalized = dataset.schema.normalize_update(record, changes)
+                if any(
+                    normalized[field] != value for field, value in reference.identity
+                ):
+                    raise ReferenceInUseError(dataset.name, source_dataset)
+
+    def _inbound_references(
+        self,
+        target: TableDataset,
+        affected: list[dict[str, Any]],
+        *,
+        ignore_affected_sources: bool,
+    ) -> list[tuple[str, ReferenceValue, dict[str, Any]]]:
+        inbound = []
+        for source_name, source in self.datasets.items():
+            if not isinstance(source, TableDataset):
+                continue
+            for source_record in source.rows:
+                if (
+                    ignore_affected_sources
+                    and source is target
+                    and source_record in affected
+                ):
+                    continue
+                for reference in _iter_references(source_record):
+                    if reference.dataset != target.name:
+                        continue
+                    matched = next(
+                        (
+                            record
+                            for record in affected
+                            if all(
+                                record.get(field) == value
+                                for field, value in reference.identity
+                            )
+                        ),
+                        None,
+                    )
+                    if matched is not None:
+                        inbound.append((source_name, reference, matched))
+        return inbound
 
     def _resolve_query_references(
         self,
@@ -501,6 +577,17 @@ def _reference_targets(descriptor: TypeDescriptor) -> list[str]:
         if isinstance(argument, TypeDescriptor)
         for target in _reference_targets(argument)
     ]
+
+
+def _iter_references(value: Any) -> Iterator[ReferenceValue]:
+    if isinstance(value, ReferenceValue):
+        yield value
+    elif isinstance(value, Mapping):
+        for item in value.values():
+            yield from _iter_references(item)
+    elif isinstance(value, (list, tuple, set, frozenset)):
+        for item in value:
+            yield from _iter_references(item)
 
 
 def _identity_fields(dataset: TableDataset) -> list[tuple[str, ...]]:

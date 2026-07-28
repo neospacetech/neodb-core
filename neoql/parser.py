@@ -7,6 +7,7 @@ from .ast import (
     Comparison,
     Constraint,
     CreateDatasetStatement,
+    DeleteStatement,
     FieldDefinition,
     ListLiteral,
     Literal,
@@ -23,6 +24,7 @@ from .ast import (
     Span,
     Statement,
     TypeRef,
+    UpdateStatement,
     Value,
 )
 from .errors import NeoQLSyntaxError
@@ -147,7 +149,9 @@ class Parser:
         value = self._value()
         return RecordField(Span(name.span.start, value.span.end), name.lexeme, value)
 
-    def _selection(self) -> SelectionStatement:
+    def _selection(
+        self,
+    ) -> SelectionStatement | UpdateStatement | DeleteStatement:
         dataset = self._consume(TokenKind.IDENTIFIER, "Expected dataset name")
         self._consume(TokenKind.LEFT_PAREN, "Expected '(' after dataset name")
         predicate = None
@@ -160,6 +164,16 @@ class Parser:
         )
         operations: list[Projection | MethodCall] = []
         while self._match(TokenKind.DOT):
+            if self._check(TokenKind.IDENTIFIER) and self._peek().lexeme.lower() in {
+                "update",
+                "delete",
+            }:
+                if operations:
+                    self._error(
+                        self._peek(),
+                        "Mutations must directly follow a dataset invocation",
+                    )
+                return self._mutation(dataset, predicate)
             operation: Projection | MethodCall
             if self._check(TokenKind.LEFT_PAREN):
                 operation = self._projection()
@@ -172,6 +186,37 @@ class Parser:
             dataset.lexeme,
             predicate,
             tuple(operations),
+        )
+
+    def _mutation(
+        self,
+        dataset: Token,
+        predicate: Predicate | None,
+    ) -> UpdateStatement | DeleteStatement:
+        method = self._advance()
+        self._consume(TokenKind.LEFT_PAREN, f"Expected '(' after {method.lexeme}")
+        if method.lexeme.lower() == "update":
+            values = self._record()
+            if not values.fields:
+                self._error(method, "update() requires at least one field")
+            end = self._consume(
+                TokenKind.RIGHT_PAREN,
+                "Expected ')' after update values",
+            )
+            return UpdateStatement(
+                Span(dataset.span.start, end.span.end),
+                dataset.lexeme,
+                predicate,
+                values,
+            )
+        end = self._consume(
+            TokenKind.RIGHT_PAREN,
+            "delete() does not accept arguments",
+        )
+        return DeleteStatement(
+            Span(dataset.span.start, end.span.end),
+            dataset.lexeme,
+            predicate,
         )
 
     def _projection(self) -> Projection:
@@ -460,6 +505,19 @@ def statement_to_query(statement: Statement) -> dict[str, Any]:
             "action": "insert",
             "dataset": statement.dataset,
             "objects": [_record_to_dict(record) for record in statement.records],
+        }
+    if isinstance(statement, UpdateStatement):
+        return {
+            "action": "update",
+            "dataset": statement.dataset,
+            "filter": _predicate_to_query(statement.predicate),
+            "values": _record_to_dict(statement.values),
+        }
+    if isinstance(statement, DeleteStatement):
+        return {
+            "action": "delete",
+            "dataset": statement.dataset,
+            "filter": _predicate_to_query(statement.predicate),
         }
     query = {
         "action": "select",

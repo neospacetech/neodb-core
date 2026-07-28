@@ -40,7 +40,15 @@ NeoDB CLI - Available commands:
    - Query a dataset with optional filters
    - Example: users({age>20, score>=3.5})
 
-4. help
+4. <dataset>({filters}).update({values})
+   - Update matching table records atomically
+   - Example: users({id=1}).update({active=true})
+
+5. <dataset>({filters}).delete()
+   - Delete matching table records atomically
+   - Example: users({inactive=true}).delete()
+
+6. help
    - Show this help text
 """,
     "create": (
@@ -52,6 +60,13 @@ NeoDB CLI - Available commands:
         "Example: add {id=1, name=Alice} into users"
     ),
     "select": ("Usage: <dataset>({filters})\nExample: users({age>20})"),
+    "update": (
+        "Usage: <dataset>({filters}).update({values})\n"
+        "Example: users({id=1}).update({active=true})"
+    ),
+    "delete": (
+        "Usage: <dataset>({filters}).delete()\nExample: users({inactive=true}).delete()"
+    ),
 }
 
 

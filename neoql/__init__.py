@@ -3,9 +3,11 @@
 from .ast import (
     AddStatement,
     CreateDatasetStatement,
+    DeleteStatement,
     ObjectLiteral,
     SelectionStatement,
     Statement,
+    UpdateStatement,
 )
 from .errors import (
     AmbiguousReferenceError,
@@ -21,6 +23,7 @@ from .errors import (
     QueryTimeoutError,
     ReferenceConflictError,
     ReferenceCycleError,
+    ReferenceInUseError,
     UnknownFieldError,
     UnsupportedDatasetError,
     span_to_dict,
@@ -70,6 +73,7 @@ __all__ = [
     "AmbiguousReferenceError",
     "AlgebraPlan",
     "CreateDatasetStatement",
+    "DeleteStatement",
     "ConstraintViolation",
     "DatasetAlreadyExistsError",
     "DatasetSchema",
@@ -98,6 +102,7 @@ __all__ = [
     "QueryTimeoutError",
     "ReferenceConflictError",
     "ReferenceCycleError",
+    "ReferenceInUseError",
     "ReferenceValue",
     "ReversePlan",
     "SelectionStatement",
@@ -111,6 +116,7 @@ __all__ = [
     "UnknownFieldError",
     "UnsupportedDatasetError",
     "UniquePlan",
+    "UpdateStatement",
     "cast_value",
     "evaluate_operator",
     "evaluate_predicate",
