@@ -264,6 +264,34 @@ users({id=1})
 users({age>18})
 ```
 
+Invocation options provide a compact equivalent of the core Selection methods:
+
+```neoql
+users(options={
+    select=[id, name, age],
+    order=[age, desc],
+    offset=20,
+    limit=10
+})
+
+users(
+    {active=true},
+    {order=[name, asc], limit=20}
+)
+```
+
+Without a predicate, the `options=` name is required to distinguish options
+from a predicate. After a predicate, the second object may be bare or written
+as `options={...}`.
+
+The v0.1 keys are `select`, `order`, `offset`, and `limit`. `select` requires a
+non-empty field list. `order` accepts `[field]` or `[field, asc|desc]`.
+`offset` and `limit` require non-negative integers. Options compile in that
+canonical order to the same lazy plan nodes as projection, `order`, `offset`,
+and `limit`. Chained methods execute afterward and compose normally; they do
+not silently replace option values. Unknown or duplicate keys and invalid
+values are source-located syntax diagnostics.
+
 ## 8. Predicates
 
 Predicates are enclosed in braces:

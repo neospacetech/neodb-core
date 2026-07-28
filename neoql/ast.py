@@ -169,6 +169,11 @@ class TraversalOperation(Node):
     depth: int = 1
 
 
+@dataclass(frozen=True, slots=True)
+class DatasetOptions(Node):
+    fields: tuple["RecordField", ...]
+
+
 SelectionOperation: TypeAlias = (
     Projection | MethodCall | WhereOperation | TraversalOperation
 )
@@ -205,6 +210,7 @@ class SelectionStatement(Node):
     dataset: str
     predicate: Predicate | None
     operations: tuple[SelectionOperation, ...] = ()
+    options: DatasetOptions | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -11,6 +11,7 @@ from .ast import (
     Comparison,
     Constraint,
     CreateDatasetStatement,
+    DatasetOptions,
     DeleteStatement,
     Expression,
     FieldDefinition,
@@ -170,6 +171,11 @@ class Parser:
         if (
             self._check(TokenKind.IDENTIFIER)
             and self._check_next(TokenKind.LEFT_PAREN)
+            and not (
+                self._peek_at(2).kind == TokenKind.IDENTIFIER
+                and self._peek_at(2).lexeme.lower() == "options"
+                and self._peek_at(3).kind == TokenKind.EQUAL
+            )
             and (
                 self._peek_at(2).kind
                 not in {TokenKind.LEFT_BRACE, TokenKind.RIGHT_PAREN}
@@ -484,10 +490,27 @@ class Parser:
         dataset = self._consume(TokenKind.IDENTIFIER, "Expected dataset name")
         self._consume(TokenKind.LEFT_PAREN, "Expected '(' after dataset name")
         predicate = None
-        if self._match(TokenKind.LEFT_BRACE):
+        options = None
+        if (
+            self._check(TokenKind.IDENTIFIER)
+            and self._peek().lexeme.lower() == "options"
+            and self._check_next(TokenKind.EQUAL)
+        ):
+            self._advance()
+            self._advance()
+            options = self._dataset_options()
+        elif self._match(TokenKind.LEFT_BRACE):
             if not self._check(TokenKind.RIGHT_BRACE):
                 predicate = self._predicate()
             self._consume(TokenKind.RIGHT_BRACE, "Expected '}' after predicate")
+            if self._match(TokenKind.COMMA):
+                if (
+                    self._check(TokenKind.IDENTIFIER)
+                    and self._peek().lexeme.lower() == "options"
+                ):
+                    self._advance()
+                    self._consume(TokenKind.EQUAL, "Expected '=' after options")
+                options = self._dataset_options()
         end = self._consume(
             TokenKind.RIGHT_PAREN, "Expected ')' after dataset invocation"
         )
@@ -520,7 +543,12 @@ class Parser:
             dataset.lexeme,
             predicate,
             tuple(operations),
+            options,
         )
+
+    def _dataset_options(self) -> DatasetOptions:
+        record = self._record()
+        return DatasetOptions(record.span, record.fields)
 
     def _mutation(
         self,
@@ -956,6 +984,88 @@ def _record_to_dict(
     }
 
 
+def _dataset_options_to_pipeline(
+    options: DatasetOptions,
+    bindings: Mapping[str, Any] | None,
+    selection_resolver: SelectionValueResolver | None,
+) -> list[dict[str, Any]]:
+    supported = {"select", "order", "offset", "limit"}
+    fields: dict[str, RecordField] = {}
+    for field in options.fields:
+        name = field.name.lower()
+        if name not in supported:
+            raise NeoQLSyntaxError(
+                f"Unknown dataset option '{field.name}'",
+                field.span,
+                "",
+            )
+        if name in fields:
+            raise NeoQLSyntaxError(
+                f"Duplicate dataset option '{field.name}'",
+                field.span,
+                "",
+            )
+        fields[name] = field
+
+    values = {
+        name: _value_to_python(field.value, bindings, selection_resolver)
+        for name, field in fields.items()
+    }
+    pipeline: list[dict[str, Any]] = []
+    if "select" in fields:
+        selected = values["select"]
+        if (
+            not isinstance(selected, list)
+            or not selected
+            or any(not isinstance(field, str) or not field for field in selected)
+        ):
+            raise NeoQLSyntaxError(
+                "Dataset option 'select' expects a non-empty field list",
+                fields["select"].span,
+                "",
+            )
+        pipeline.append({"operation": "project", "fields": selected})
+    if "order" in fields:
+        ordering = values["order"]
+        if (
+            not isinstance(ordering, list)
+            or len(ordering) not in {1, 2}
+            or not isinstance(ordering[0], str)
+            or not ordering[0]
+            or (
+                len(ordering) == 2
+                and (
+                    not isinstance(ordering[1], str)
+                    or ordering[1].lower() not in {"asc", "desc"}
+                )
+            )
+        ):
+            raise NeoQLSyntaxError(
+                "Dataset option 'order' expects [field] or [field, direction]",
+                fields["order"].span,
+                "",
+            )
+        pipeline.append(
+            {
+                "operation": "order",
+                "field": ordering[0],
+                "direction": ordering[1].lower() if len(ordering) == 2 else "asc",
+            }
+        )
+    for name in ("offset", "limit"):
+        if name not in fields:
+            continue
+        count = values[name]
+        if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+            raise NeoQLSyntaxError(
+                f"Dataset option '{name}' expects a non-negative integer",
+                fields[name].span,
+                "",
+            )
+        pipeline.append({"operation": name, "count": count})
+    return pipeline
+
+
 def statement_to_query(
     statement: Statement,
     bindings: Mapping[str, Any] | None = None,
@@ -1103,7 +1213,15 @@ def statement_to_query(
     grouping = False
     aggregated = False
     pipeline: list[dict[str, Any]] = []
-    extended_pipeline = False
+    extended_pipeline = statement.options is not None
+    if statement.options is not None:
+        pipeline.extend(
+            _dataset_options_to_pipeline(
+                statement.options,
+                bindings,
+                selection_resolver,
+            )
+        )
     for operation in statement.operations:
         if aggregated:
             raise NeoQLSyntaxError(
