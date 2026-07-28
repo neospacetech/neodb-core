@@ -9,6 +9,7 @@ from statistics import median, pstdev
 from types import MappingProxyType
 from typing import Any, TypeAlias, overload
 
+from .ast import Span
 from .errors import EngineError, UnknownFieldError
 from .predicates import evaluate_predicate
 
@@ -62,6 +63,8 @@ class ExpandPlan:
 class AlgebraPlan:
     operation: str
     other: "Selection"
+    span: Span | None = None
+    source: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,6 +129,43 @@ class Selection:
         predicate = query.get("filter")
         if predicate:
             selection = selection.where(predicate)
+        pipeline = query.get("pipeline")
+        if pipeline:
+            for item in pipeline:
+                operation = item["operation"]
+                if operation == "where":
+                    selection = selection.where(item["predicate"])
+                elif operation == "project":
+                    selection = selection.project(*item["fields"])
+                elif operation == "order":
+                    fields = item.get("fields", [item.get("field")])
+                    selection = selection.order(
+                        *((field, item["direction"]) for field in fields)
+                    )
+                elif operation == "limit":
+                    selection = selection.limit(item["count"])
+                elif operation == "offset":
+                    selection = selection.offset(item["count"])
+                elif operation == "unique":
+                    selection = selection.unique(*item["fields"])
+                elif operation == "reverse":
+                    selection = selection.reverse()
+                elif operation == "flatten":
+                    selection = selection.flatten(item["field"])
+                elif operation == "expand":
+                    selection = selection.expand(item["field"])
+                elif operation == "similarity":
+                    selection = selection.similarity(
+                        item["field"],
+                        item["vector"],
+                        metric=item["metric"],
+                    )
+                elif operation == "traverse":
+                    selection = selection.traverse(
+                        item["label"],
+                        depth=item["depth"],
+                    )
+            return selection
         similarity = query.get("similarity")
         if similarity:
             selection = selection.similarity(
@@ -376,14 +416,21 @@ class Selection:
     def _append(self, node: PlanNode) -> "Selection":
         return Selection(self._source, (*self._plan, node))
 
-    def _algebra(self, operation: str, other: "Selection") -> "Selection":
+    def _algebra(
+        self,
+        operation: str,
+        other: "Selection",
+        *,
+        span: Span | None = None,
+        source: str | None = None,
+    ) -> "Selection":
         if not isinstance(other, Selection):
             raise EngineError(
                 "invalid_plan",
                 "Selection algebra requires another Selection",
                 phase="plan",
             )
-        return self._append(AlgebraPlan(operation, other))
+        return self._append(AlgebraPlan(operation, other, span, source))
 
     def _apply_algebra(
         self,
@@ -397,7 +444,12 @@ class Selection:
                 for left_record in left
                 for right_record in right
             ]
-        _validate_compatible_schemas(left, right)
+        try:
+            _validate_compatible_schemas(left, right)
+        except EngineError as error:
+            if node.span is not None:
+                raise error.with_source(node.span, node.source) from error
+            raise
         left_unique = _unique_records(left)
         right_unique = _unique_records(right)
         left_keys = {_record_key(record) for record in left_unique}

@@ -128,7 +128,12 @@ class MethodCall(Node):
     arguments: tuple[Value | str, ...]
 
 
-SelectionOperation: TypeAlias = Projection | MethodCall
+@dataclass(frozen=True, slots=True)
+class WhereOperation(Node):
+    predicate: Predicate
+
+
+SelectionOperation: TypeAlias = Projection | MethodCall | WhereOperation
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,8 +200,25 @@ class FunctionCallStatement(Node):
     arguments: tuple[Value, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class AlgebraExpression(Node):
+    left: "Expression"
+    operator: str
+    right: "Expression"
+
+
+@dataclass(frozen=True, slots=True)
+class SelectionPipelineExpression(Node):
+    base: "Expression"
+    operations: tuple[SelectionOperation, ...]
+
+
 Expression: TypeAlias = (
-    SelectionStatement | VariableReferenceStatement | FunctionCallStatement
+    SelectionStatement
+    | VariableReferenceStatement
+    | FunctionCallStatement
+    | AlgebraExpression
+    | SelectionPipelineExpression
 )
 
 
@@ -211,4 +233,6 @@ Statement: TypeAlias = (
     | VariableReferenceStatement
     | FunctionDeclarationStatement
     | FunctionCallStatement
+    | AlgebraExpression
+    | SelectionPipelineExpression
 )

@@ -1,11 +1,12 @@
 """Recursive-descent NeoQL parser and legacy query adapter."""
 
 from collections.abc import Mapping
-from typing import Any, NoReturn, cast
+from typing import Any, NoReturn, TypeAlias, cast
 
 from .ast import (
     AddLinkStatement,
     AddStatement,
+    AlgebraExpression,
     Comparison,
     Constraint,
     CreateDatasetStatement,
@@ -26,6 +27,8 @@ from .ast import (
     ProjectionField,
     RecordField,
     RecordLiteral,
+    SelectionOperation,
+    SelectionPipelineExpression,
     SelectionStatement,
     Span,
     Statement,
@@ -34,9 +37,12 @@ from .ast import (
     Value,
     VariableAssignmentStatement,
     VariableReferenceStatement,
+    WhereOperation,
 )
 from .errors import NeoQLSyntaxError
 from .lexer import Token, TokenKind, tokenize
+
+ParsedExpression: TypeAlias = Expression | UpdateStatement | DeleteStatement
 
 
 class Parser:
@@ -73,24 +79,148 @@ class Parser:
         | DeleteStatement
         | VariableReferenceStatement
         | FunctionCallStatement
+        | AlgebraExpression
+        | SelectionPipelineExpression
     ):
-        if self._check(TokenKind.IDENTIFIER) and self._peek_at(1).kind in {
-            TokenKind.EOF,
-            TokenKind.RIGHT_BRACE,
-        }:
-            name = self._advance()
-            return VariableReferenceStatement(name.span, name.lexeme)
+        return self._union_expression(allow_mutation=allow_mutation)
+
+    def _union_expression(
+        self,
+        *,
+        allow_mutation: bool = False,
+    ) -> ParsedExpression:
+        expression = self._difference_expression(allow_mutation=allow_mutation)
+        while self._match(TokenKind.PLUS):
+            operator = self._previous()
+            right = self._difference_expression()
+            expression = self._algebra(expression, operator, right)
+        return expression
+
+    def _difference_expression(
+        self,
+        *,
+        allow_mutation: bool = False,
+    ) -> ParsedExpression:
+        expression = self._intersection_expression(allow_mutation=allow_mutation)
+        while self._match(TokenKind.MINUS, TokenKind.CARET):
+            operator = self._previous()
+            right = self._intersection_expression()
+            expression = self._algebra(expression, operator, right)
+        return expression
+
+    def _intersection_expression(
+        self,
+        *,
+        allow_mutation: bool = False,
+    ) -> ParsedExpression:
+        expression = self._product_expression(allow_mutation=allow_mutation)
+        while self._match(TokenKind.AMPERSAND):
+            operator = self._previous()
+            right = self._product_expression()
+            expression = self._algebra(expression, operator, right)
+        return expression
+
+    def _product_expression(
+        self,
+        *,
+        allow_mutation: bool = False,
+    ) -> ParsedExpression:
+        expression = self._selection_atom(allow_mutation=allow_mutation)
+        while self._match(TokenKind.STAR):
+            operator = self._previous()
+            right = self._selection_atom()
+            expression = self._algebra(expression, operator, right)
+        return expression
+
+    def _selection_atom(self, *, allow_mutation: bool = False) -> ParsedExpression:
+        if self._match(TokenKind.LEFT_PAREN):
+            start = self._previous()
+            expression = self._union_expression()
+            end = self._consume(
+                TokenKind.RIGHT_PAREN,
+                "Expected ')' after Selection expression",
+            )
+            if not isinstance(
+                expression,
+                (
+                    SelectionStatement,
+                    VariableReferenceStatement,
+                    FunctionCallStatement,
+                    AlgebraExpression,
+                    SelectionPipelineExpression,
+                ),
+            ):
+                self._error(start, "Mutations are not Selection expressions")
+            return self._pipeline(
+                expression,
+                Span(start.span.start, end.span.end),
+            )
         if (
             self._check(TokenKind.IDENTIFIER)
             and self._check_next(TokenKind.LEFT_PAREN)
             and self._peek_at(2).kind
             not in {TokenKind.LEFT_BRACE, TokenKind.RIGHT_PAREN}
         ):
-            return self._function_call()
+            call = self._function_call()
+            return self._pipeline(call, call.span)
+        if not self._check(TokenKind.IDENTIFIER):
+            self._error(self._peek(), "Expected Selection expression")
+        if not self._check_next(TokenKind.LEFT_PAREN):
+            name = self._advance()
+            reference = VariableReferenceStatement(name.span, name.lexeme)
+            return self._pipeline(reference, reference.span)
         selection = self._selection()
         if not isinstance(selection, SelectionStatement) and not allow_mutation:
             self._error(self._previous(), "Mutations are not expressions")
         return selection
+
+    def _pipeline(self, base: Expression, span: Span) -> Expression:
+        operations: list[SelectionOperation] = []
+        end = span.end
+        while self._match(TokenKind.DOT):
+            operation: SelectionOperation
+            if self._check(TokenKind.LEFT_PAREN):
+                operation = self._projection()
+            else:
+                operation = self._method_call()
+            operations.append(operation)
+            end = operation.span.end
+        if not operations:
+            return base
+        return SelectionPipelineExpression(
+            Span(span.start, end),
+            base,
+            tuple(operations),
+        )
+
+    def _algebra(
+        self,
+        left: ParsedExpression,
+        operator: Token,
+        right: ParsedExpression,
+    ) -> AlgebraExpression:
+        operands = (
+            SelectionStatement,
+            VariableReferenceStatement,
+            FunctionCallStatement,
+            AlgebraExpression,
+            SelectionPipelineExpression,
+        )
+        if not isinstance(left, operands) or not isinstance(right, operands):
+            self._error(operator, "Selection algebra does not accept mutations")
+        names = {
+            TokenKind.PLUS: "union",
+            TokenKind.MINUS: "difference",
+            TokenKind.STAR: "product",
+            TokenKind.AMPERSAND: "intersection",
+            TokenKind.CARET: "symmetric_difference",
+        }
+        return AlgebraExpression(
+            Span(left.span.start, right.span.end),
+            left,
+            names[operator.kind],
+            right,
+        )
 
     def _variable_assignment(self) -> VariableAssignmentStatement:
         name = self._consume(TokenKind.IDENTIFIER, "Expected variable name")
@@ -288,7 +418,7 @@ class Parser:
         end = self._consume(
             TokenKind.RIGHT_PAREN, "Expected ')' after dataset invocation"
         )
-        operations: list[Projection | MethodCall] = []
+        operations: list[SelectionOperation] = []
         while self._match(TokenKind.DOT):
             if self._check(TokenKind.IDENTIFIER) and self._peek().lexeme.lower() in {
                 "update",
@@ -300,7 +430,7 @@ class Parser:
                         "Mutations must directly follow a dataset invocation",
                     )
                 return self._mutation(dataset, predicate)
-            operation: Projection | MethodCall
+            operation: SelectionOperation
             if self._check(TokenKind.LEFT_PAREN):
                 operation = self._projection()
             else:
@@ -369,9 +499,15 @@ class Parser:
             )
         return ProjectionField(self._span(name, end), name.lexeme, tuple(children))
 
-    def _method_call(self) -> MethodCall:
+    def _method_call(self) -> MethodCall | WhereOperation:
         name = self._consume(TokenKind.IDENTIFIER, "Expected selection method")
         self._consume(TokenKind.LEFT_PAREN, "Expected '(' after method name")
+        if name.lexeme.lower() == "where":
+            self._consume(TokenKind.LEFT_BRACE, "where() expects a predicate block")
+            predicate = self._predicate()
+            self._consume(TokenKind.RIGHT_BRACE, "Expected '}' after predicate")
+            end = self._consume(TokenKind.RIGHT_PAREN, "Expected ')' after where")
+            return WhereOperation(self._span(name, end), predicate)
         arguments: list[Value | str] = []
         if not self._check(TokenKind.RIGHT_PAREN):
             arguments.append(self._method_argument())
@@ -702,6 +838,8 @@ def statement_to_query(
     }
     grouping = False
     aggregated = False
+    pipeline: list[dict[str, Any]] = []
+    extended_pipeline = False
     for operation in statement.operations:
         if aggregated:
             raise NeoQLSyntaxError(
@@ -716,7 +854,24 @@ def statement_to_query(
                     operation.span,
                     "",
                 )
-            query["select"] = [field.name for field in operation.fields]
+            fields = [field.name for field in operation.fields]
+            query["select"] = fields
+            pipeline.append({"operation": "project", "fields": fields})
+            continue
+        if isinstance(operation, WhereOperation):
+            if grouping:
+                raise NeoQLSyntaxError(
+                    "Only an aggregation may follow group()",
+                    operation.span,
+                    "",
+                )
+            pipeline.append(
+                {
+                    "operation": "where",
+                    "predicate": _predicate_to_query(operation.predicate, bindings),
+                }
+            )
+            extended_pipeline = True
             continue
         arguments = tuple(
             argument
@@ -740,7 +895,7 @@ def statement_to_query(
                 "",
             )
         if operation.name == "order":
-            if not arguments or not isinstance(arguments[0], str):
+            if len(arguments) not in {1, 2} or not isinstance(arguments[0], str):
                 raise NeoQLSyntaxError(
                     "order() expects a field name",
                     operation.span,
@@ -758,6 +913,13 @@ def statement_to_query(
             query.setdefault("order_by", []).append(
                 {"field": arguments[0], "direction": direction}
             )
+            pipeline.append(
+                {
+                    "operation": "order",
+                    "field": arguments[0],
+                    "direction": direction,
+                }
+            )
         elif operation.name in {"limit", "offset"}:
             if (
                 len(arguments) != 1
@@ -770,6 +932,51 @@ def statement_to_query(
                     "",
                 )
             query[operation.name] = arguments[0]
+            pipeline.append({"operation": operation.name, "count": arguments[0]})
+        elif operation.name in {"unique", "distinct"}:
+            if any(not isinstance(argument, str) for argument in arguments):
+                raise NeoQLSyntaxError(
+                    f"{operation.name}() expects field names",
+                    operation.span,
+                    "",
+                )
+            pipeline.append({"operation": "unique", "fields": list(arguments)})
+            extended_pipeline = True
+        elif operation.name == "sort":
+            if not arguments or any(
+                not isinstance(argument, str) for argument in arguments
+            ):
+                raise NeoQLSyntaxError(
+                    "sort() expects one or more field names",
+                    operation.span,
+                    "",
+                )
+            pipeline.append(
+                {
+                    "operation": "order",
+                    "fields": list(arguments),
+                    "direction": "asc",
+                }
+            )
+            extended_pipeline = True
+        elif operation.name == "reverse":
+            if arguments:
+                raise NeoQLSyntaxError(
+                    "reverse() does not accept arguments",
+                    operation.span,
+                    "",
+                )
+            pipeline.append({"operation": "reverse"})
+            extended_pipeline = True
+        elif operation.name in {"flatten", "expand"}:
+            if len(arguments) != 1 or not isinstance(arguments[0], str):
+                raise NeoQLSyntaxError(
+                    f"{operation.name}() expects one field name",
+                    operation.span,
+                    "",
+                )
+            pipeline.append({"operation": operation.name, "field": arguments[0]})
+            extended_pipeline = True
         elif operation.name in {"distance", "similarity"}:
             if any(key in query for key in {"select", "order_by", "limit", "offset"}):
                 raise NeoQLSyntaxError(
@@ -799,6 +1006,12 @@ def statement_to_query(
                 "vector": arguments[1],
                 "metric": metric,
             }
+            pipeline.append(
+                {
+                    "operation": "similarity",
+                    **query["similarity"],
+                }
+            )
         elif operation.name == "traverse":
             if (
                 len(arguments) not in {1, 2}
@@ -821,6 +1034,12 @@ def statement_to_query(
                 "label": arguments[0],
                 "depth": arguments[1] if len(arguments) == 2 else 1,
             }
+            pipeline.append(
+                {
+                    "operation": "traverse",
+                    **query["traverse"],
+                }
+            )
         elif operation.name == "explain":
             if arguments:
                 raise NeoQLSyntaxError(
@@ -864,4 +1083,6 @@ def statement_to_query(
                 operation.span,
                 "",
             )
+    if extended_pipeline:
+        query["pipeline"] = pipeline
     return query

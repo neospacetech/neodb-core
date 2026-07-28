@@ -7,12 +7,14 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from .ast import (
+    AlgebraExpression,
     CreateDatasetStatement,
     FunctionCallStatement,
     FunctionDeclarationStatement,
     Literal,
     ObjectLiteral,
     ParameterReference,
+    SelectionPipelineExpression,
     SelectionStatement,
     Statement,
     Value,
@@ -20,6 +22,7 @@ from .ast import (
     VariableReferenceStatement,
 )
 from .errors import (
+    EngineError,
     FunctionArityError,
     ImmutableBindingError,
     RecursionNotAllowedError,
@@ -86,6 +89,37 @@ class NeoQLSession:
         source: str,
         parameters: Mapping[str, Any],
     ) -> Any:
+        if isinstance(statement, AlgebraExpression):
+            left = self._require_selection(
+                self._evaluate(statement.left, source, parameters),
+                statement.left.span,
+                source,
+            )
+            right = self._require_selection(
+                self._evaluate(statement.right, source, parameters),
+                statement.right.span,
+                source,
+            )
+            return left._algebra(
+                statement.operator,
+                right,
+                span=statement.span,
+                source=source,
+            )
+        if isinstance(statement, SelectionPipelineExpression):
+            base = self._require_selection(
+                self._evaluate(statement.base, source, parameters),
+                statement.base.span,
+                source,
+            )
+            pipeline = SelectionStatement(
+                statement.span,
+                "__pipeline__",
+                None,
+                statement.operations,
+            )
+            query = statement_to_query(pipeline, parameters)
+            return self._finish_selection(base.refine(query), query)
         if isinstance(statement, VariableReferenceStatement):
             if statement.name in parameters:
                 return parameters[statement.name]
@@ -120,6 +154,17 @@ class NeoQLSession:
             return self.engine.execute_query(query)
         query = statement_to_query(statement, parameters)
         return self.engine.execute_query(query)
+
+    @staticmethod
+    def _require_selection(value: Any, span: Any, source: str) -> Selection:
+        if not isinstance(value, Selection):
+            raise EngineError(
+                "invalid_selection_operand",
+                "Selection expression requires a Selection value",
+                phase="plan",
+                details={"actual": type(value).__name__},
+            ).with_source(span, source)
+        return value
 
     def _call(
         self,

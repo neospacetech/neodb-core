@@ -42,6 +42,19 @@ class StatementBufferTests(unittest.TestCase):
         self.assertEqual(buffer.feed('users({name="Alice'), [])
         self.assertEqual(buffer.finish(), ['users({name="Alice'])
 
+    def test_multiline_algebra_operators_continue_the_statement(self):
+        statements = split_script(
+            """
+            combined = adults +
+                employees &
+                contractors
+            combined
+            """
+        )
+        self.assertEqual(len(statements), 2)
+        self.assertIn("adults +", statements[0].source)
+        self.assertIn("employees &", statements[0].source)
+
 
 class ReplBufferingTests(unittest.TestCase):
     def test_repl_uses_continuation_prompt(self):

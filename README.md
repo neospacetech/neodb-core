@@ -435,8 +435,8 @@ Every Selection exposes composable methods that return another Selection:
 ```neoql
 .where({active=true})
 .order(name asc)
-.limit()
-.offset()
+.limit(20)
+.offset(10)
 .unique()
 .traverse()
 .group()
@@ -517,6 +517,15 @@ compatible with any schema. Cartesian product preserves input multiplicity
 and emits `{left: <record>, right: <record>}` so overlapping field names are
 unambiguous. Algebra operators are lazy and do not consume either operand
 until their result is consumed.
+
+Product (`*`) binds most tightly, followed by intersection (`&`), then
+difference and symmetric difference (`-` and `^`), then union (`+`). Operators
+at the same level associate left-to-right. Parentheses override precedence and
+the result can be chained like any other Selection:
+
+```neoql
+active = (adults + employees).where({active=true}).distinct(id)
+```
 
 The operators `÷`, `×`, `⊂`, and `⊃` may receive symbolic aliases in a future
 version.

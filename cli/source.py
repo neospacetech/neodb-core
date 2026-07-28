@@ -97,7 +97,8 @@ def _split_complete(
                 char == ";"
                 or (
                     char == "\n"
-                    and last_significant not in {"", ".", ",", "=", "&", "|"}
+                    and last_significant
+                    not in {"", ".", ",", "=", "&", "|", "+", "-", "*", "^"}
                     and not _requires_continuation(source[start:index])
                 )
             )

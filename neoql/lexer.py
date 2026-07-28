@@ -29,6 +29,11 @@ class TokenKind(str, Enum):
     AND = "&&"
     OR = "||"
     NOT = "!"
+    PLUS = "+"
+    MINUS = "-"
+    STAR = "*"
+    AMPERSAND = "&"
+    CARET = "^"
     EOF = "eof"
 
 
@@ -73,6 +78,9 @@ class Lexer:
             ",": TokenKind.COMMA,
             ".": TokenKind.DOT,
             "=": TokenKind.EQUAL,
+            "+": TokenKind.PLUS,
+            "*": TokenKind.STAR,
+            "^": TokenKind.CARET,
         }
         if char in punctuation:
             return self._token(punctuation[char], start)
@@ -90,14 +98,19 @@ class Lexer:
                 TokenKind.LESS_EQUAL if self._match("=") else TokenKind.LESS,
                 start,
             )
-        if char == "&" and self._match("&"):
-            return self._token(TokenKind.AND, start)
+        if char == "&":
+            return self._token(
+                TokenKind.AND if self._match("&") else TokenKind.AMPERSAND,
+                start,
+            )
         if char == "|" and self._match("|"):
             return self._token(TokenKind.OR, start)
         if char in "\"'":
             return self._string(char, start)
         if char.isdigit() or (char == "-" and self._peek().isdigit()):
             return self._number(start)
+        if char == "-":
+            return self._token(TokenKind.MINUS, start)
         if char.isalpha() or char == "_":
             return self._identifier(start)
         raise NeoQLSyntaxError(
