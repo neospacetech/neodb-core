@@ -134,7 +134,7 @@ class TableDatasetTests(unittest.TestCase):
     def test_rejects_unsupported_action(self):
         table = TableDataset("users")
         with self.assertRaises(NotImplementedError):
-            table.query({"action": "update"})
+            table.query({"action": "truncate"})
 
 
 if __name__ == "__main__":

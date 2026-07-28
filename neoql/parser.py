@@ -406,15 +406,32 @@ def _record_to_dict(record: RecordLiteral) -> dict[str, Any]:
 def statement_to_query(statement: Statement) -> dict[str, Any]:
     """Adapt an AST statement to the current engine query contract."""
     if isinstance(statement, CreateDatasetStatement):
+        from .schema import SchemaDefinitionError
         from .types import resolve_type
 
         schema = {}
         for field in statement.fields:
+            if field.name in schema:
+                raise SchemaDefinitionError(
+                    f"Duplicate field '{field.name}'", field=field.name
+                )
             entry: dict[str, Any] = {"type": resolve_type(field.type_ref).display()}
             if field.constraints:
-                entry["constraints"] = [
-                    constraint.name for constraint in field.constraints
-                ]
+                constraints: list[str | dict[str, Any]] = []
+                for constraint in field.constraints:
+                    if constraint.arguments:
+                        constraints.append(
+                            {
+                                "name": constraint.name,
+                                "arguments": [
+                                    _value_to_python(argument)
+                                    for argument in constraint.arguments
+                                ],
+                            }
+                        )
+                    else:
+                        constraints.append(constraint.name)
+                entry["constraints"] = constraints
             schema[field.name] = entry
         query: dict[str, Any] = {
             "action": "create_dataset",

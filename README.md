@@ -81,6 +81,36 @@ inferred = infer_type([1, 2, 3])
 identifier = cast_value("12345678-1234-5678-1234-567812345678", user_id)
 ```
 
+## Schema enforcement
+
+Table schemas are runtime contracts. Fields are required unless they are
+nullable or have a default, and values are cast through their declared NeoQL
+type before storage:
+
+```neoql
+create dataset users(
+    table{
+        tenant_id(int, pk),
+        id(int, pk),
+        email(str(255), unique, index),
+        display_name(str(80), default("Anonymous")),
+        nickname(str(80), nullable),
+        biography(text, searchable),
+        embedding(list(float), vector),
+        created_by(str(80), readonly)
+    }
+)
+```
+
+Primary keys and unique values are checked across existing records and an
+entire incoming batch before anything is committed. Updates use the same type,
+nullability, uniqueness, and readonly rules. The schema also exposes index,
+vector, and search metadata for later planners.
+
+Constraint failures raise `ConstraintViolation`, whose `to_dict()` result
+contains a stable error category, code, dataset, field, message, offending
+value when applicable, and additional conflict details.
+
 ## Roadmap
 
 - Complete the NeoQL parser and typed abstract syntax tree

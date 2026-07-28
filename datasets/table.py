@@ -1,3 +1,8 @@
+from collections.abc import Callable, Mapping
+from typing import Any, cast
+
+from neoql.schema import DatasetSchema
+
 from .base import BaseDataset
 
 
@@ -8,26 +13,58 @@ class TableDataset(BaseDataset):
         BaseDataset (BaseDataset): The base dataset class.
     """
 
-    def __init__(self, name, schema=None):
+    def __init__(self, name: str, schema: Mapping[str, Any] | None = None):
         self.name = name
-        self.schema = schema or {}
-        self.columns = list(self.schema)
-        self.rows = []
+        self.schema = DatasetSchema.from_mapping(name, schema)
+        self.columns = list(self.schema.fields)
+        self.rows: list[dict[str, Any]] = []
+        self.index_metadata = self.schema.indexes
 
-    def insert(self, row):
-        if not isinstance(row, dict):
+    def insert(self, row: Mapping[str, Any]) -> dict[str, Any]:
+        inserted = self.insert_many([row])
+        return inserted[0]
+
+    def insert_many(self, rows: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+        if not all(isinstance(row, Mapping) for row in rows):
             raise TypeError("Table records must be objects")
-        unknown = set(row) - set(self.columns)
-        if self.columns and unknown:
-            raise ValueError(f"Unknown fields: {', '.join(sorted(unknown))}")
-        self.rows.append(dict(row))
+        normalized = [self.schema.normalize_insert(row) for row in rows]
+        candidates = [*self.rows, *normalized]
+        self.schema.validate_records(candidates)
+        self.rows.extend(normalized)
+        return [dict(row) for row in normalized]
+
+    def update(
+        self,
+        changes: Mapping[str, Any],
+        where: Callable[[Mapping[str, Any]], bool] | None = None,
+    ) -> int:
+        predicate = where or (lambda _row: True)
+        matched = [predicate(row) for row in self.rows]
+        candidates = [
+            self.schema.normalize_update(row, changes) if should_update else dict(row)
+            for row, should_update in zip(self.rows, matched, strict=True)
+        ]
+        self.schema.validate_records(candidates)
+        updated = sum(matched)
+        self.rows = candidates
+        return updated
 
     def query(self, neoql):
         action = neoql.get("action")
         if action == "insert":
-            for obj in neoql["objects"]:
-                self.insert(obj)
+            self.insert_many(neoql["objects"])
             return {"status": "success", "inserted": len(neoql["objects"])}
+        if action == "update":
+            filter_obj = neoql.get("filter")
+            updated = self.update(
+                neoql.get("values", {}),
+                where=(
+                    lambda row: (
+                        self._apply_filter(row, filter_obj) if filter_obj else True
+                    )
+                ),
+            )
+            return {"status": "success", "updated": updated}
         if action != "select":
             raise NotImplementedError("Only 'select' action is supported in query")
         result = self.rows.copy()
@@ -44,7 +81,7 @@ class TableDataset(BaseDataset):
             for order in reversed(order_by):
                 field = order["field"]
                 result.sort(
-                    key=lambda row: row.get(field),
+                    key=lambda row: cast(Any, row.get(field)),
                     reverse=order.get("direction") == "desc",
                 )
         offset = neoql.get("offset", 0)
