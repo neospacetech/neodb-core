@@ -3,6 +3,7 @@
 from typing import Any, NoReturn
 
 from .ast import (
+    AddLinkStatement,
     AddStatement,
     Comparison,
     Constraint,
@@ -124,14 +125,46 @@ class Parser:
             end = self._consume(TokenKind.RIGHT_PAREN, "Expected ')' after constraint")
         return Constraint(self._span(name, end), name.lexeme, tuple(arguments))
 
-    def _add(self) -> AddStatement:
+    def _add(self) -> AddStatement | AddLinkStatement:
         start = self._previous()
+        if self._keyword("link"):
+            return self._add_link(start)
         records = [self._record()]
         while self._match(TokenKind.COMMA):
             records.append(self._record())
         self._consume_keyword("into")
         dataset = self._consume(TokenKind.IDENTIFIER, "Expected destination dataset")
         return AddStatement(self._span(start, dataset), tuple(records), dataset.lexeme)
+
+    def _add_link(self, start: Token) -> AddLinkStatement:
+        self._consume(TokenKind.LEFT_PAREN, "Expected '(' after link")
+        fields = []
+        if not self._check(TokenKind.RIGHT_PAREN):
+            fields.append(self._record_field())
+            while self._match(TokenKind.COMMA):
+                fields.append(self._record_field())
+        properties_end = self._consume(
+            TokenKind.RIGHT_PAREN,
+            "Expected ')' after link properties",
+        )
+        self._consume_keyword("between")
+        source = self._selection()
+        if not isinstance(source, SelectionStatement) or source.operations:
+            self._error(self._previous(), "Link endpoints must be dataset selections")
+        self._consume(TokenKind.COMMA, "Expected ',' between link endpoints")
+        target = self._selection()
+        if not isinstance(target, SelectionStatement) or target.operations:
+            self._error(self._previous(), "Link endpoints must be dataset selections")
+        properties = RecordLiteral(
+            Span(start.span.start, properties_end.span.end),
+            tuple(fields),
+        )
+        return AddLinkStatement(
+            Span(start.span.start, target.span.end),
+            properties,
+            source,
+            target,
+        )
 
     def _record(self) -> RecordLiteral:
         start = self._consume(TokenKind.LEFT_BRACE, "Expected record literal")
@@ -506,6 +539,13 @@ def statement_to_query(statement: Statement) -> dict[str, Any]:
             "dataset": statement.dataset,
             "objects": [_record_to_dict(record) for record in statement.records],
         }
+    if isinstance(statement, AddLinkStatement):
+        return {
+            "action": "add_link",
+            "properties": _record_to_dict(statement.properties),
+            "source": statement_to_query(statement.source),
+            "target": statement_to_query(statement.target),
+        }
     if isinstance(statement, UpdateStatement):
         return {
             "action": "update",
@@ -619,6 +659,33 @@ def statement_to_query(statement: Statement) -> dict[str, Any]:
                 "field": operation.arguments[0],
                 "vector": _value_to_python(operation.arguments[1]),
                 "metric": metric,
+            }
+        elif operation.name == "traverse":
+            if (
+                len(operation.arguments) not in {1, 2}
+                or not isinstance(operation.arguments[0], str)
+                or (
+                    len(operation.arguments) == 2
+                    and (
+                        not isinstance(operation.arguments[1], Literal)
+                        or not isinstance(operation.arguments[1].value, int)
+                        or operation.arguments[1].value < 1
+                    )
+                )
+            ):
+                raise NeoQLSyntaxError(
+                    "traverse() expects a relationship label and positive depth",
+                    operation.span,
+                    "",
+                )
+            query["traverse"] = {
+                "label": operation.arguments[0],
+                "depth": (
+                    operation.arguments[1].value
+                    if len(operation.arguments) == 2
+                    and isinstance(operation.arguments[1], Literal)
+                    else 1
+                ),
             }
         elif operation.name == "group":
             if (

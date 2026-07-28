@@ -423,6 +423,10 @@ users({id=2})
 
 Links are first-class records.
 
+`label` is required; `bidir` defaults to `false` and `data` defaults to an
+empty object. Both endpoint Selections must resolve to exactly one node in the
+same graph dataset. Links receive a stable dataset-local `id`.
+
 ## 16. Selection methods
 
 Every Selection exposes composable methods that return another Selection:
@@ -462,10 +466,16 @@ Example:
 
 ```neoql
 users({id=1}).traverse(
-    friends({age>18}),
-    depth=3
+    friend,
+    3
 )
 ```
+
+Traversal follows matching labels breadth-first, excludes the starting nodes,
+and never emits a node twice, so cycles are safe. Directed links follow source
+to target; bidirectional links can be followed from either endpoint. Depth
+must be positive and defaults to one. The returned value is a lazy Selection,
+so normal filters and transforms can be appended before it is consumed.
 
 ## 18. Variables
 

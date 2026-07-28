@@ -16,6 +16,7 @@ from neoql.errors import (
     DatasetAlreadyExistsError,
     DatasetNotFoundError,
     EngineError,
+    InvalidTraversalError,
     MissingReferenceError,
     ReferenceConflictError,
     ReferenceCycleError,
@@ -158,6 +159,7 @@ class NeoDBEngine:
             "insert",
             "update",
             "delete",
+            "add_link",
         }:
             return self._execute_transaction([dict(query)])[0]
         initial_transaction = self.active_transaction_id
@@ -182,6 +184,8 @@ class NeoDBEngine:
                     schema=query.get("schema", None),
                 )
                 return {"status": "success", "dataset": dataset.name}
+            case "add_link":
+                return self._add_link(query)
 
         dataset = self.datasets.get(query["dataset"])
         if not dataset:
@@ -189,6 +193,65 @@ class NeoDBEngine:
         prepared = self._resolve_query_references(dataset, query)
         self._validate_mutation_references(dataset, prepared)
         return dataset.query(prepared)
+
+    def _add_link(self, query: Mapping[str, Any]) -> dict[str, Any]:
+        source_query = query.get("source")
+        target_query = query.get("target")
+        if not isinstance(source_query, Mapping) or not isinstance(
+            target_query,
+            Mapping,
+        ):
+            raise InvalidTraversalError("Links require two endpoint selections")
+        if source_query.get("dataset") != target_query.get("dataset"):
+            raise InvalidTraversalError(
+                "Link endpoints must belong to the same graph dataset",
+            )
+        dataset_name = source_query.get("dataset")
+        if not isinstance(dataset_name, str):
+            raise InvalidTraversalError("Link endpoint dataset must be named")
+        dataset = self.datasets.get(dataset_name)
+        if not isinstance(dataset, GraphDataset):
+            raise InvalidTraversalError(
+                "Link endpoints must belong to a graph dataset",
+                dataset=dataset_name,
+            )
+        source_records = dataset.query(source_query).consume()
+        target_records = dataset.query(target_query).consume()
+        if len(source_records) != 1 or len(target_records) != 1:
+            raise InvalidTraversalError(
+                "Each link endpoint must select exactly one node",
+                dataset=dataset_name,
+                source_count=len(source_records),
+                target_count=len(target_records),
+            )
+        properties = query.get("properties", {})
+        if not isinstance(properties, Mapping):
+            raise InvalidTraversalError("Link properties must be an object")
+        unknown = set(properties) - {"label", "bidir", "data"}
+        label = properties.get("label")
+        bidirectional = properties.get("bidir", False)
+        data = properties.get("data", {})
+        if (
+            unknown
+            or not isinstance(label, str)
+            or not label
+            or not isinstance(bidirectional, bool)
+            or not isinstance(data, Mapping)
+        ):
+            raise InvalidTraversalError(
+                "Links require label, optional bidir boolean, and object data",
+                fields=sorted(properties),
+            )
+        return {
+            "status": "success",
+            "link": dataset.add_link(
+                source_records[0]["id"],
+                target_records[0]["id"],
+                label=label,
+                bidirectional=bidirectional,
+                data=data,
+            ),
+        }
 
     def _execute_transaction(
         self,

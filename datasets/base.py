@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from typing import Any
 
+from neoql.errors import InvalidTraversalError
 from neoql.predicates import evaluate_predicate
 from neoql.selection import Selection
 
@@ -37,6 +38,19 @@ class BaseDataset(ABC):
     ) -> None:
         """Validate aggregate fields before reading source records."""
         return None
+
+    def _traverse_selection(
+        self,
+        records: list[dict[str, Any]],
+        label: str,
+        depth: int,
+    ) -> list[dict[str, Any]]:
+        raise InvalidTraversalError(
+            "Traversal requires a graph dataset",
+            dataset=getattr(self, "name", None),
+            label=label,
+            depth=depth,
+        )
 
     def _select(self, neoql: Mapping[str, Any]) -> Any:
         result: Any = Selection.from_query(self, neoql)

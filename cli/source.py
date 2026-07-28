@@ -98,6 +98,7 @@ def _split_complete(
                 or (
                     char == "\n"
                     and last_significant not in {"", ".", ",", "=", "&", "|"}
+                    and not _requires_continuation(source[start:index])
                 )
             )
         )
@@ -117,6 +118,13 @@ def _split_complete(
         remainder = ""
         start_line = line
     return statements, remainder, start_line
+
+
+def _requires_continuation(candidate: str) -> bool:
+    meaningful = _meaningful(candidate).lower()
+    if meaningful.startswith("add link") and "between" not in meaningful.split():
+        return True
+    return meaningful.endswith("between")
 
 
 def _meaningful(source: str) -> str:

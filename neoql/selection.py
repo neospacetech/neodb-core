@@ -71,6 +71,12 @@ class SimilarityPlan:
     metric: str
 
 
+@dataclass(frozen=True, slots=True)
+class TraversalPlan:
+    label: str
+    depth: int
+
+
 PlanNode: TypeAlias = (
     FilterPlan
     | ProjectionPlan
@@ -83,6 +89,7 @@ PlanNode: TypeAlias = (
     | ExpandPlan
     | AlgebraPlan
     | SimilarityPlan
+    | TraversalPlan
 )
 
 
@@ -113,6 +120,12 @@ class Selection:
                 similarity["field"],
                 similarity["vector"],
                 metric=similarity.get("metric", "cosine"),
+            )
+        traversal = query.get("traverse")
+        if traversal:
+            selection = selection.traverse(
+                traversal["label"],
+                depth=traversal.get("depth", 1),
             )
         fields = query.get("select")
         if fields:
@@ -206,6 +219,16 @@ class Selection:
         metric: str = "euclidean",
     ) -> "Selection":
         return self.similarity(field, vector, metric=metric)
+
+    def traverse(self, label: str, *, depth: int = 1) -> "Selection":
+        if not isinstance(label, str) or not label or depth < 1:
+            raise EngineError(
+                "invalid_traversal",
+                "Traversal requires a relationship label and positive depth",
+                phase="plan",
+                details={"label": label, "depth": depth},
+            )
+        return self._append(TraversalPlan(label, depth))
 
     def group(self, field: str) -> "GroupedSelection":
         return GroupedSelection(self, field)
@@ -303,6 +326,12 @@ class Selection:
                 result = self._expand(result, node.field)
             elif isinstance(node, SimilarityPlan):
                 result = self._similarity(result, node)
+            elif isinstance(node, TraversalPlan):
+                result = self._source._traverse_selection(
+                    result,
+                    node.label,
+                    node.depth,
+                )
             else:
                 result = self._apply_algebra(result, node)
         return result

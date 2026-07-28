@@ -1,6 +1,7 @@
 """NeoQL language frontend."""
 
 from .ast import (
+    AddLinkStatement,
     AddStatement,
     CreateDatasetStatement,
     DeleteStatement,
@@ -59,6 +60,7 @@ from .selection import (
     ReversePlan,
     Selection,
     SimilarityPlan,
+    TraversalPlan,
     UniquePlan,
 )
 from .types import (
@@ -73,6 +75,7 @@ from .types import (
 
 __all__ = [
     "AddStatement",
+    "AddLinkStatement",
     "Aggregation",
     "AmbiguousReferenceError",
     "AlgebraPlan",
@@ -114,6 +117,7 @@ __all__ = [
     "SchemaDefinitionError",
     "Selection",
     "SimilarityPlan",
+    "TraversalPlan",
     "Statement",
     "Token",
     "TokenKind",

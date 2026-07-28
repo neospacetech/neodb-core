@@ -140,6 +140,13 @@ class AddStatement(Node):
 
 
 @dataclass(frozen=True, slots=True)
+class AddLinkStatement(Node):
+    properties: RecordLiteral
+    source: "SelectionStatement"
+    target: "SelectionStatement"
+
+
+@dataclass(frozen=True, slots=True)
 class SelectionStatement(Node):
     dataset: str
     predicate: Predicate | None
@@ -162,6 +169,7 @@ class DeleteStatement(Node):
 Statement: TypeAlias = (
     CreateDatasetStatement
     | AddStatement
+    | AddLinkStatement
     | SelectionStatement
     | UpdateStatement
     | DeleteStatement
