@@ -406,9 +406,11 @@ def _record_to_dict(record: RecordLiteral) -> dict[str, Any]:
 def statement_to_query(statement: Statement) -> dict[str, Any]:
     """Adapt an AST statement to the current engine query contract."""
     if isinstance(statement, CreateDatasetStatement):
+        from .types import resolve_type
+
         schema = {}
         for field in statement.fields:
-            entry: dict[str, Any] = {"type": field.type_ref.render()}
+            entry: dict[str, Any] = {"type": resolve_type(field.type_ref).display()}
             if field.constraints:
                 entry["constraints"] = [
                     constraint.name for constraint in field.constraints

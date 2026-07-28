@@ -68,6 +68,19 @@ line and column positions. Syntax errors use those spans to render a precise
 diagnostic and source caret. The current engine adapter converts supported AST
 statements into the MVP execution contract while the lazy planner is developed.
 
+Parsed schemas pass through NeoQL's semantic type system before reaching the
+engine. The public type API supports validation, display, serialization,
+literal inference, and explicit casting:
+
+```python
+from neoql import cast_value, infer_type, parse_type
+
+user_id = parse_type("uuid")
+tags = parse_type("list(str(32))")
+inferred = infer_type([1, 2, 3])
+identifier = cast_value("12345678-1234-5678-1234-567812345678", user_id)
+```
+
 ## Roadmap
 
 - Complete the NeoQL parser and typed abstract syntax tree
