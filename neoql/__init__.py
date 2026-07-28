@@ -45,10 +45,12 @@ from .schema import (
     SchemaDefinitionError,
 )
 from .selection import (
+    Aggregation,
     AlgebraPlan,
     ExpandPlan,
     FilterPlan,
     FlattenPlan,
+    GroupedSelection,
     LimitPlan,
     OffsetPlan,
     OrderPlan,
@@ -70,6 +72,7 @@ from .types import (
 
 __all__ = [
     "AddStatement",
+    "Aggregation",
     "AmbiguousReferenceError",
     "AlgebraPlan",
     "CreateDatasetStatement",
@@ -85,6 +88,7 @@ __all__ = [
     "FieldSchema",
     "FilterPlan",
     "FlattenPlan",
+    "GroupedSelection",
     "IndexMetadata",
     "InvalidTraversalError",
     "Lexer",

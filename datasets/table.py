@@ -134,6 +134,15 @@ class TableDataset(BaseDataset):
                         details={"dataset": self.name, "field": node.field},
                     )
 
+    def _validate_aggregation(
+        self,
+        field: str | None,
+        group_field: str | None,
+    ) -> None:
+        self._validate_query_fields(
+            name for name in (field, group_field) if name is not None
+        )
+
     def _validate_query_fields(self, fields: Iterable[str]) -> None:
         for field in fields:
             if field not in self.schema.fields:

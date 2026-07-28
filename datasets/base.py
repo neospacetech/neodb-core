@@ -30,8 +30,24 @@ class BaseDataset(ABC):
         """Validate a plan before reading source records."""
         return None
 
-    def _select(self, neoql: Mapping[str, Any]) -> Selection:
-        return Selection.from_query(self, neoql)
+    def _validate_aggregation(
+        self,
+        field: str | None,
+        group_field: str | None,
+    ) -> None:
+        """Validate aggregate fields before reading source records."""
+        return None
+
+    def _select(self, neoql: Mapping[str, Any]) -> Any:
+        result: Any = Selection.from_query(self, neoql)
+        group_field = neoql.get("group_by")
+        if group_field is not None:
+            result = result.group(group_field)
+        aggregate = neoql.get("aggregate")
+        if aggregate is not None:
+            arguments = [aggregate["field"]] if "field" in aggregate else []
+            result = getattr(result, aggregate["operation"])(*arguments)
+        return result
 
     @staticmethod
     def _apply_filter(obj, filter_obj):

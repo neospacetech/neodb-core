@@ -20,7 +20,7 @@ from neoql.parser import (
     parse_statement,
     statement_to_query,
 )
-from neoql.selection import Selection
+from neoql.selection import Aggregation, GroupedSelection, Selection
 
 from .source import StatementBuffer, split_script
 
@@ -261,7 +261,11 @@ def run(engine: NeoDBEngine, json_query):
         print("Executing query:")
         print(json.dumps(json_query, indent=2))
         result = engine.execute_query(json_query)
-        return result.consume() if isinstance(result, Selection) else result
+        return (
+            result.consume()
+            if isinstance(result, (Selection, GroupedSelection, Aggregation))
+            else result
+        )
     except DiagnosticError as error:
         print_diagnostic(error)
         return None
@@ -285,7 +289,7 @@ def run_script(path: str | Path, engine: NeoDBEngine | None = None) -> int:
         try:
             query = compile_source(located_source)
             result = runtime.execute_query(query)
-            if isinstance(result, Selection):
+            if isinstance(result, (Selection, GroupedSelection, Aggregation)):
                 result = result.consume()
             print(json.dumps(result, sort_keys=True, default=str))
         except DiagnosticError as error:

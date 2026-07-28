@@ -498,6 +498,13 @@ users().median(age)
 users().std(age)
 ```
 
+Aggregations are lazy result objects and scan their source only when consumed.
+`count()` counts every selected record. Field aggregates ignore `null`;
+`sum` returns `0` when no non-null values remain, while `avg`, `min`, `max`,
+`median`, and `std` return `null`. `sum`, `avg`, `median`, and `std` require
+numeric fields; incompatible values raise `invalid_aggregation`. `std` is the
+population standard deviation.
+
 ## 21. Grouping
 
 `group` returns a grouped Selection, which can be aggregated:
@@ -506,6 +513,11 @@ users().std(age)
 users().group(country)
 users().group(country).count()
 ```
+
+Groups preserve the first-seen key order and include `null` as a key.
+Consuming an unaggregated group returns records shaped as
+`{country=<key>, records=[...]}`. A grouped aggregation returns one record per
+group, such as `{country="US", count=2}` or `{country="US", avg=42}`.
 
 ## 22. Ordering
 

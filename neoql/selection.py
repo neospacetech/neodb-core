@@ -2,7 +2,9 @@
 
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from decimal import Decimal
 from functools import partial
+from statistics import median, pstdev
 from types import MappingProxyType
 from typing import Any, TypeAlias, overload
 
@@ -76,7 +78,7 @@ PlanNode: TypeAlias = (
 
 
 @dataclass(frozen=True, slots=True, eq=False)
-class Selection(Sequence[dict[str, Any]]):
+class Selection:
     """A lazy, immutable query over one dataset."""
 
     _source: Any
@@ -146,6 +148,30 @@ class Selection(Sequence[dict[str, Any]]):
 
     def expand(self, field: str) -> "Selection":
         return self._append(ExpandPlan(field))
+
+    def group(self, field: str) -> "GroupedSelection":
+        return GroupedSelection(self, field)
+
+    def count(self) -> "Aggregation":
+        return Aggregation(self, "count")
+
+    def sum(self, field: str) -> "Aggregation":
+        return Aggregation(self, "sum", field)
+
+    def avg(self, field: str) -> "Aggregation":
+        return Aggregation(self, "avg", field)
+
+    def min(self, field: str) -> "Aggregation":
+        return Aggregation(self, "min", field)
+
+    def max(self, field: str) -> "Aggregation":
+        return Aggregation(self, "max", field)
+
+    def median(self, field: str) -> "Aggregation":
+        return Aggregation(self, "median", field)
+
+    def std(self, field: str) -> "Aggregation":
+        return Aggregation(self, "std", field)
 
     def union(self, other: "Selection") -> "Selection":
         return self._algebra("union", other)
@@ -367,6 +393,152 @@ class Selection(Sequence[dict[str, Any]]):
 
     def __repr__(self) -> str:
         return f"Selection(dataset={self.dataset!r}, plan={self._plan!r})"
+
+
+@dataclass(frozen=True, slots=True)
+class GroupedSelection:
+    """A lazy Selection partitioned by one field."""
+
+    selection: Selection
+    field: str
+
+    def consume(self) -> list[dict[str, Any]]:
+        self.selection._source._validate_aggregation(None, self.field)
+        return [
+            {self.field: value, "records": records}
+            for value, records in _group_records(
+                self.selection.consume(),
+                self.field,
+                self.selection.dataset,
+            )
+        ]
+
+    def count(self) -> "Aggregation":
+        return Aggregation(self.selection, "count", group_field=self.field)
+
+    def sum(self, field: str) -> "Aggregation":
+        return Aggregation(self.selection, "sum", field, self.field)
+
+    def avg(self, field: str) -> "Aggregation":
+        return Aggregation(self.selection, "avg", field, self.field)
+
+    def min(self, field: str) -> "Aggregation":
+        return Aggregation(self.selection, "min", field, self.field)
+
+    def max(self, field: str) -> "Aggregation":
+        return Aggregation(self.selection, "max", field, self.field)
+
+    def median(self, field: str) -> "Aggregation":
+        return Aggregation(self.selection, "median", field, self.field)
+
+    def std(self, field: str) -> "Aggregation":
+        return Aggregation(self.selection, "std", field, self.field)
+
+
+@dataclass(frozen=True, slots=True)
+class Aggregation:
+    """A scalar or grouped aggregation that executes only when consumed."""
+
+    selection: Selection
+    operation: str
+    field: str | None = None
+    group_field: str | None = None
+
+    def consume(self) -> Any:
+        self.selection._source._validate_aggregation(self.field, self.group_field)
+        records = self.selection.consume()
+        if self.group_field is None:
+            return _aggregate(
+                records, self.operation, self.field, self.selection.dataset
+            )
+
+        return [
+            {
+                self.group_field: group_value,
+                self.operation: _aggregate(
+                    group_records,
+                    self.operation,
+                    self.field,
+                    self.selection.dataset,
+                ),
+            }
+            for group_value, group_records in _group_records(
+                records,
+                self.group_field,
+                self.selection.dataset,
+            )
+        ]
+
+    def __repr__(self) -> str:
+        grouped = (
+            f", group_field={self.group_field!r}"
+            if self.group_field is not None
+            else ""
+        )
+        return (
+            f"Aggregation(dataset={self.selection.dataset!r}, "
+            f"operation={self.operation!r}, field={self.field!r}{grouped})"
+        )
+
+
+def _aggregate(
+    records: list[dict[str, Any]],
+    operation: str,
+    field: str | None,
+    dataset: str,
+) -> Any:
+    if operation == "count":
+        return len(records)
+    assert field is not None
+    if any(field not in record for record in records):
+        raise UnknownFieldError(dataset, field)
+    values = [record[field] for record in records if record[field] is not None]
+    if not values:
+        return 0 if operation == "sum" else None
+    if operation in {"sum", "avg", "median", "std"} and any(
+        isinstance(value, bool) or not isinstance(value, (int, float, Decimal))
+        for value in values
+    ):
+        raise EngineError(
+            "invalid_aggregation",
+            f"{operation} requires numeric field '{field}'",
+            details={"dataset": dataset, "field": field, "operation": operation},
+        )
+    try:
+        if operation == "sum":
+            return sum(values)
+        if operation == "avg":
+            return sum(values) / len(values)
+        if operation == "min":
+            return min(values)
+        if operation == "max":
+            return max(values)
+        if operation == "median":
+            return median(values)
+        return pstdev(values)
+    except TypeError as error:
+        raise EngineError(
+            "invalid_aggregation",
+            f"{operation} cannot compare values in field '{field}'",
+            details={"dataset": dataset, "field": field, "operation": operation},
+        ) from error
+
+
+def _group_records(
+    records: list[dict[str, Any]],
+    field: str,
+    dataset: str,
+) -> list[tuple[Any, list[dict[str, Any]]]]:
+    groups: dict[Any, tuple[Any, list[dict[str, Any]]]] = {}
+    for record in records:
+        if field not in record:
+            raise UnknownFieldError(dataset, field)
+        value = record[field]
+        key = _value_key(value)
+        if key not in groups:
+            groups[key] = (value, [])
+        groups[key][1].append(record)
+    return list(groups.values())
 
 
 def _freeze_mapping(value: Mapping[str, Any]) -> Mapping[str, Any]:

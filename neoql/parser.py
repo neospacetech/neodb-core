@@ -524,10 +524,39 @@ def statement_to_query(statement: Statement) -> dict[str, Any]:
         "dataset": statement.dataset,
         "filter": _predicate_to_query(statement.predicate),
     }
+    grouping = False
+    aggregated = False
     for operation in statement.operations:
+        if aggregated:
+            raise NeoQLSyntaxError(
+                "Aggregation must be the final Selection operation",
+                operation.span,
+                "",
+            )
         if isinstance(operation, Projection):
+            if grouping:
+                raise NeoQLSyntaxError(
+                    "Only an aggregation may follow group()",
+                    operation.span,
+                    "",
+                )
             query["select"] = [field.name for field in operation.fields]
             continue
+        aggregate_methods = {
+            "count",
+            "sum",
+            "avg",
+            "min",
+            "max",
+            "median",
+            "std",
+        }
+        if grouping and operation.name not in aggregate_methods:
+            raise NeoQLSyntaxError(
+                "Only an aggregation may follow group()",
+                operation.span,
+                "",
+            )
         if operation.name == "order":
             if not operation.arguments or not isinstance(operation.arguments[0], str):
                 raise NeoQLSyntaxError(
@@ -559,6 +588,39 @@ def statement_to_query(statement: Statement) -> dict[str, Any]:
                     "",
                 )
             query[operation.name] = operation.arguments[0].value
+        elif operation.name == "group":
+            if (
+                grouping
+                or len(operation.arguments) != 1
+                or not isinstance(operation.arguments[0], str)
+            ):
+                raise NeoQLSyntaxError(
+                    "group() expects one field name",
+                    operation.span,
+                    "",
+                )
+            query["group_by"] = operation.arguments[0]
+            grouping = True
+        elif operation.name in aggregate_methods:
+            expects_field = operation.name != "count"
+            valid_arguments = (
+                len(operation.arguments) == 1
+                and isinstance(operation.arguments[0], str)
+                if expects_field
+                else not operation.arguments
+            )
+            if not valid_arguments:
+                expectation = "one field name" if expects_field else "no arguments"
+                raise NeoQLSyntaxError(
+                    f"{operation.name}() expects {expectation}",
+                    operation.span,
+                    "",
+                )
+            aggregate: dict[str, Any] = {"operation": operation.name}
+            if expects_field:
+                aggregate["field"] = operation.arguments[0]
+            query["aggregate"] = aggregate
+            aggregated = True
         else:
             raise NeoQLSyntaxError(
                 f"Unsupported selection method '{operation.name}'",
