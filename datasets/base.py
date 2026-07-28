@@ -7,7 +7,7 @@ class BaseDataset(ABC):
     Args:
         ABC (ABC): Abstract Base Class.
     """
-    
+
     @abstractmethod
     def insert(self, obj):
         pass
@@ -45,7 +45,9 @@ class BaseDataset(ABC):
         if op == "matches":
             import re
 
-            return isinstance(obj_value, str) and re.search(value, obj_value) is not None
+            return (
+                isinstance(obj_value, str) and re.search(value, obj_value) is not None
+            )
         if obj_value is None:
             return False
         if op == ">":

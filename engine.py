@@ -1,14 +1,13 @@
-"""A simple NeoDB engine implementation.
-"""
+"""A simple NeoDB engine implementation."""
 
 from datasets.graph import GraphDataset
-from datasets.table import TableDataset
 from datasets.kvs import KVSDataset
+from datasets.table import TableDataset
 
 
 class NeoDBEngine:
-    """A NeoDB engine for managing datasets.
-    """
+    """A NeoDB engine for managing datasets."""
+
     def __init__(self):
         self.datasets = {}
 
@@ -55,7 +54,7 @@ class NeoDBEngine:
                 dataset = self.create_dataset(
                     query["name"],
                     dtype=query.get("type", "graph"),
-                    schema=query.get("schema", None)
+                    schema=query.get("schema", None),
                 )
                 return {"status": "success", "dataset": dataset.name}
 

@@ -43,7 +43,7 @@ class NeoQLParserTests(unittest.TestCase):
     def test_selection_method_chain(self):
         self.assertEqual(
             parse_cli_command(
-                'users({age>=18}).(name, age).order(age desc).limit(5).offset(1)'
+                "users({age>=18}).(name, age).order(age desc).limit(5).offset(1)"
             ),
             {
                 "action": "select",

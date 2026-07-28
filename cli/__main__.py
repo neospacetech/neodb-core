@@ -6,6 +6,7 @@ This module provides a command-line interface for interacting with the NeoDB eng
 import json
 import re
 import uuid
+
 from engine import NeoDBEngine
 
 HELP_TEXT = {
@@ -27,9 +28,15 @@ NeoDB CLI - Available commands:
 4. help
    - Show this help text
 """,
-    "create": "Usage: create dataset <name>(<type>{<schema>})\nCreates a new dataset. Example: create dataset users(table{id(int, pk), name(str(255))})",
-    "add": "Usage: add {..}, {..} into <dataset>\nAdds objects to the dataset. Example: add {id=1, name=Alice} into users",
-    "select": "Usage: <dataset>({filters})\nSelects objects matching filters. Example: users({age>20})"
+    "create": (
+        "Usage: create dataset <name>(<type>{<schema>})\n"
+        "Example: create dataset users(table{id(int, pk), name(str(255))})"
+    ),
+    "add": (
+        "Usage: add {..}, {..} into <dataset>\n"
+        "Example: add {id=1, name=Alice} into users"
+    ),
+    "select": ("Usage: <dataset>({filters})\nExample: users({age>20})"),
 }
 
 
@@ -107,14 +114,14 @@ def parse_schema(schema_str: str):
     Keeps type with inner parentheses (str(255)), constraints only if extra.
     """
     schema = {}
-    
+
     parts = split_top_level(schema_str)
 
     for field_def in parts:
         if "(" not in field_def or not field_def.endswith(")"):
             continue
-        field_name = field_def[:field_def.index("(")].strip()
-        props_str = field_def[field_def.index("(")+1:-1].strip()
+        field_name = field_def[: field_def.index("(")].strip()
+        props_str = field_def[field_def.index("(") + 1 : -1].strip()
 
         props = split_top_level(props_str)
 
@@ -183,12 +190,10 @@ def parse_filters(filter_str: str):
         )
         if op_match:
             op = (op_match.group(1) or op_match.group(2)).strip()
-            field = cond[:op_match.start()].strip()
-            value = cond[op_match.end():].strip()
+            field = cond[: op_match.start()].strip()
+            value = cond[op_match.end() :].strip()
             field = field.strip()
-            conditions.append(
-                {"field": field, "op": op, "value": parse_literal(value)}
-            )
+            conditions.append({"field": field, "op": op, "value": parse_literal(value)})
     if not conditions:
         raise ValueError(f"Invalid predicate: {filter_str}")
     return conditions[0]
@@ -199,8 +204,7 @@ def create_dataset(cmd: str):
     create dataset users(graph)
     create dataset users(graph{id(int, pk), name(str(255))})
     """
-    match = re.match(r"create\s+dataset\s+(\w+)\((\w+)(?:\{(.*)\})?\)",
-                     cmd, re.I)
+    match = re.match(r"create\s+dataset\s+(\w+)\((\w+)(?:\{(.*)\})?\)", cmd, re.I)
     if not match:
         raise ValueError("Invalid create dataset syntax")
     name, dtype, schema_str = match.groups()
@@ -227,7 +231,9 @@ def select(cmd: str):
         name, args, methods = method.groups()
         args = args.strip()
         if name == "":
-            query["select"] = [field.strip() for field in args.split(",") if field.strip()]
+            query["select"] = [
+                field.strip() for field in args.split(",") if field.strip()
+            ]
         elif name == "order":
             order = args.rsplit(maxsplit=1)
             direction = order[1].lower() if len(order) == 2 else "asc"
@@ -314,15 +320,13 @@ def execute_cli_command(engine: NeoDBEngine, cmd: str, transaction_space=None):
                     print("No active transaction to commit.")
                     return None
                 transaction_id = transaction_space["active"]
-                execute_cli_command(
-                    engine, "end transaction", transaction_space
-                )
+                execute_cli_command(engine, "end transaction", transaction_space)
             output = run(
                 engine,
                 {
                     "action": "batch",
                     "queries": list(transaction_space[transaction_id]),
-                }
+                },
             )
             del transaction_space[transaction_id]
             print(f"Transaction {transaction_id} committed.")
@@ -366,11 +370,20 @@ def run(engine: NeoDBEngine, json_query):
         return None
 
 
-if __name__ == "__main__":
+def main():
+    """Run the interactive NeoDB shell."""
     engine = NeoDBEngine()
     transactions = {"active": ""}
     while True:
-        inp = input("neodb> ").strip()
+        try:
+            inp = input("neodb> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
         if inp.lower() in ("exit", "quit"):
             break
         print(f"Output: {execute_cli_command(engine, inp, transactions)}")
+
+
+if __name__ == "__main__":
+    main()

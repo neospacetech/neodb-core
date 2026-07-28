@@ -8,13 +8,14 @@ query language for tables, graphs, documents, key/value data, and vectors.
 
 ## Quick start
 
-NeoDB currently requires Python 3.10 or newer and has no third-party runtime
+NeoDB supports Python 3.10 through 3.14 and has no third-party runtime
 dependencies.
 
 ```bash
 git clone https://github.com/neospacetech/neodb-core.git
 cd neodb-core
-python -m cli
+python -m pip install -e .
+neodb
 ```
 
 Example session:
@@ -30,6 +31,27 @@ Run the tests with:
 ```bash
 python -m unittest discover -v
 ```
+
+## Development
+
+Install the development toolchain and run all local quality gates:
+
+```bash
+python -m pip install -e ".[dev]"
+ruff format --check .
+ruff check .
+mypy cli datasets engine.py
+coverage run -m unittest discover -v
+coverage report
+python -m build
+```
+
+Coverage is enforced at 70%. Continuous integration runs the suite on every
+supported Python version and publishes coverage XML plus built distributions as
+workflow artifacts. See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution
+and release workflow, and the
+[NeoDB Core Roadmap](https://github.com/orgs/neospacetech/projects/3) for current
+progress.
 
 ## Roadmap
 

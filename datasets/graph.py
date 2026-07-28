@@ -7,7 +7,7 @@ class GraphDataset(BaseDataset):
     Args:
         BaseDataset (BaseDataset): The base dataset class.
     """
-    
+
     def __init__(self, name):
         self.name = name
         self.nodes = {}
@@ -22,7 +22,10 @@ class GraphDataset(BaseDataset):
         if neoql.get("action") == "insert":
             for obj in neoql["objects"]:
                 self.insert(obj)
-            return {"status": "success", "inserted_ids": [obj.get("id") for obj in neoql["objects"]]}
+            return {
+                "status": "success",
+                "inserted_ids": [obj.get("id") for obj in neoql["objects"]],
+            }
         result = list(self.nodes.values())
         filter_obj = neoql.get("filter")
         if filter_obj:
@@ -35,14 +38,14 @@ class GraphDataset(BaseDataset):
             for order in reversed(order_by):
                 field = order["field"]
                 direction = order.get("direction", "asc")
-                result.sort(key=lambda x: x.get(field), reverse=(direction=="desc"))
+                result.sort(key=lambda x: x.get(field), reverse=(direction == "desc"))
         offset = neoql.get("offset", 0)
         limit = neoql.get("limit")
         if limit is not None:
-            result = result[offset:offset+limit]
+            result = result[offset : offset + limit]
         else:
             result = result[offset:]
         return result
 
-# Helper for filter logic
 
+# Helper for filter logic
