@@ -381,7 +381,8 @@ def _logical_operands(
 ) -> list[Mapping[str, Any]]:
     operands = predicate[operator]
     if (
-        not isinstance(operands, list)
+        not isinstance(operands, Sequence)
+        or isinstance(operands, (str, bytes))
         or not operands
         or not all(isinstance(item, Mapping) for item in operands)
     ):
@@ -390,7 +391,7 @@ def _logical_operands(
             f"{operator} requires a non-empty predicate list",
             operator=operator,
         )
-    return operands
+    return list(operands)
 
 
 def _comparison_parts(

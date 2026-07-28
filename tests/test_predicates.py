@@ -188,15 +188,17 @@ class PredicateValidationTests(unittest.TestCase):
     def test_table_validates_predicates_even_when_empty(self):
         table = TableDataset("users", {"age": {"type": "int"}})
         with self.assertRaisesRegex(PredicateEvaluationError, "incompatible"):
-            table.query(
-                {
-                    "action": "select",
-                    "filter": {
-                        "field": "age",
-                        "op": "=",
-                        "value": "old",
-                    },
-                }
+            list(
+                table.query(
+                    {
+                        "action": "select",
+                        "filter": {
+                            "field": "age",
+                            "op": "=",
+                            "value": "old",
+                        },
+                    }
+                )
             )
 
     def test_malformed_predicate_shapes_are_rejected(self):

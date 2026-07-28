@@ -1,9 +1,10 @@
 from collections.abc import Callable, Iterable, Mapping
-from typing import Any, cast
+from typing import Any
 
 from neoql.errors import UnknownFieldError
 from neoql.predicates import validate_predicate
 from neoql.schema import DatasetSchema
+from neoql.selection import FilterPlan, OrderPlan, ProjectionPlan, Selection
 
 from .base import BaseDataset
 
@@ -70,33 +71,19 @@ class TableDataset(BaseDataset):
             return {"status": "success", "updated": updated}
         if action != "select":
             raise NotImplementedError("Only 'select' action is supported in query")
-        result = self.rows.copy()
-        filter_obj = neoql.get("filter")
-        validate_predicate(filter_obj, self.schema)
-        if filter_obj:
-            result = [row for row in result if self._apply_filter(row, filter_obj)]
-        select_fields = neoql.get("select")
-        if select_fields:
-            self._validate_query_fields(select_fields)
-            result = [
-                {field: row.get(field) for field in select_fields} for row in result
-            ]
-        order_by = neoql.get("order_by")
-        if order_by:
-            self._validate_query_fields(order["field"] for order in order_by)
-            for order in reversed(order_by):
-                field = order["field"]
-                result.sort(
-                    key=lambda row: cast(Any, row.get(field)),
-                    reverse=order.get("direction") == "desc",
-                )
-        offset = neoql.get("offset", 0)
-        limit = neoql.get("limit")
-        if limit is not None:
-            result = result[offset : offset + limit]
-        else:
-            result = result[offset:]
-        return result
+        return self._select(neoql)
+
+    def _selection_records(self):
+        return self.rows.copy()
+
+    def _validate_selection(self, selection: Selection) -> None:
+        for node in selection.plan:
+            if isinstance(node, FilterPlan):
+                validate_predicate(node.predicate, self.schema)
+            elif isinstance(node, ProjectionPlan):
+                self._validate_query_fields(node.fields)
+            elif isinstance(node, OrderPlan):
+                self._validate_query_fields(field for field, _direction in node.fields)
 
     def _validate_query_fields(self, fields: Iterable[str]) -> None:
         for field in fields:

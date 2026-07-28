@@ -1,6 +1,9 @@
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
+from typing import Any
 
 from neoql.predicates import evaluate_predicate
+from neoql.selection import Selection
 
 
 class BaseDataset(ABC):
@@ -17,6 +20,18 @@ class BaseDataset(ABC):
     @abstractmethod
     def query(self, neoql):
         pass
+
+    @abstractmethod
+    def _selection_records(self) -> list[Mapping[str, Any]]:
+        """Return current source records when a Selection is consumed."""
+        pass
+
+    def _validate_selection(self, selection: Selection) -> None:
+        """Validate a plan before reading source records."""
+        return None
+
+    def _select(self, neoql: Mapping[str, Any]) -> Selection:
+        return Selection.from_query(self, neoql)
 
     @staticmethod
     def _apply_filter(obj, filter_obj):

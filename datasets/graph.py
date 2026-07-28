@@ -26,26 +26,10 @@ class GraphDataset(BaseDataset):
                 "status": "success",
                 "inserted_ids": [obj.get("id") for obj in neoql["objects"]],
             }
-        result = list(self.nodes.values())
-        filter_obj = neoql.get("filter")
-        if filter_obj:
-            result = [node for node in result if self._apply_filter(node, filter_obj)]
-        select_fields = neoql.get("select")
-        if select_fields:
-            result = [{k: node.get(k) for k in select_fields} for node in result]
-        order_by = neoql.get("order_by")
-        if order_by:
-            for order in reversed(order_by):
-                field = order["field"]
-                direction = order.get("direction", "asc")
-                result.sort(key=lambda x: x.get(field), reverse=(direction == "desc"))
-        offset = neoql.get("offset", 0)
-        limit = neoql.get("limit")
-        if limit is not None:
-            result = result[offset : offset + limit]
-        else:
-            result = result[offset:]
-        return result
+        return self._select(neoql)
+
+    def _selection_records(self):
+        return list(self.nodes.values())
 
 
 # Helper for filter logic

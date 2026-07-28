@@ -95,7 +95,7 @@ class PublicDiagnosticTests(unittest.TestCase):
                 self.subTest(query=query),
                 self.assertRaises(UnknownFieldError) as raised,
             ):
-                engine.execute_query(query)
+                list(engine.execute_query(query))
             self.assertEqual(raised.exception.code, "unknown_field")
 
 

@@ -17,6 +17,7 @@ from neoql.parser import (
     parse_statement,
     statement_to_query,
 )
+from neoql.selection import Selection
 
 HELP_TEXT = {
     "general": """
@@ -235,7 +236,8 @@ def run(engine: NeoDBEngine, json_query):
     try:
         print("Executing query:")
         print(json.dumps(json_query, indent=2))
-        return engine.execute_query(json_query)
+        result = engine.execute_query(json_query)
+        return result.consume() if isinstance(result, Selection) else result
     except DiagnosticError as error:
         print_diagnostic(error)
         return None

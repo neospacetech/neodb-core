@@ -524,6 +524,20 @@ Every statement builds an execution plan. Execution occurs when a client
 consumes results, a mutation occurs, or an API returns. This allows NeoDB to
 optimize an entire pipeline.
 
+Dataset selections return an immutable `Selection`. Calling `where`,
+`project`, `order`, `offset`, or `limit` returns a new Selection with an
+additional frozen plan node; it does not scan the dataset. Calling `consume`,
+iterating, taking the length, indexing, or comparing with another sequence is
+a consumption boundary. The CLI is also a consumption boundary and renders
+materialized records. Inserts and updates remain immediate mutation
+boundaries.
+
+```python
+selection = engine.execute_query(query)
+refined = selection.where({"field": "active", "op": "=", "value": True})
+records = refined.consume()
+```
+
 ## 28. Optimizer rules
 
 NeoDB may reorder operations while preserving semantics, including:
