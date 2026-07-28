@@ -672,21 +672,32 @@ behavior.
 
 ## 27. Functions
 
-Built-in functions:
+Scalar built-ins are case-insensitive:
 
-```neoql
-len()
-abs()
-round()
-lower()
-upper()
-contains()
-distance()
-similarity()
-today()
-now()
-uuid()
-```
+| Function | Accepted values | Result |
+| --- | --- | --- |
+| `len(value)` | string, bytes, list, set, tuple, or map | integer length |
+| `abs(number)` | integer, float, or decimal | same numeric family |
+| `round(number[, digits])` | number and optional integer digits | ties-to-even rounded number |
+| `lower(value)` / `upper(value)` | string | case-normalized string |
+| `contains(container, value)` | string, bytes, collection, or map | boolean membership; maps test keys |
+| `today()` | no arguments | current UTC date |
+| `now()` | no arguments | current timezone-aware UTC datetime |
+| `uuid()` | no arguments | UUID |
+
+Value-taking built-ins return `null` when any required argument is `null`.
+Invalid arity raises `function_arity`; incompatible values raise
+`function_type`, with the call's source location. Calls can be nested and used
+wherever the AST accepts scalar values, including records, predicates,
+Selection method arguments, and user-defined function bodies.
+
+For an ambiguous zero-argument `name()`, resolution order is a declared
+dataset, then a user-defined function, then a built-in. This preserves existing
+bindings while keeping the built-in registry available as the fallback.
+Sessions accept injectable clock and UUID providers for deterministic tests.
+
+`distance()` and `similarity()` are Selection methods rather than scalar
+built-ins.
 
 Vector similarity is a lazy Selection operation and must precede projection,
 ordering, and pagination:
@@ -776,6 +787,8 @@ with offsets and one-based line and column positions. The CLI prints a concise
 | --- | --- | --- |
 | `syntax_error` | parse | Invalid NeoQL syntax |
 | `type_mismatch` | compile | Invalid type declaration, inference, or cast |
+| `function_arity` | runtime | Function received the wrong argument count |
+| `function_type` | runtime | Function argument has an incompatible value type |
 | `invalid_schema` | compile | Invalid field or constraint declaration |
 | `unknown_dataset` | plan | Dataset cannot be resolved |
 | `unknown_field` | plan/runtime | Field cannot be resolved |

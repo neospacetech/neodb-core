@@ -37,6 +37,12 @@ class ParameterReference(Node):
 
 
 @dataclass(frozen=True, slots=True)
+class FunctionCallValue(Node):
+    name: str
+    arguments: tuple["Value", ...]
+
+
+@dataclass(frozen=True, slots=True)
 class SelectionValue(Node):
     expression: "Expression"
 
@@ -52,7 +58,12 @@ class ObjectLiteral(Node):
 
 
 Value: TypeAlias = (
-    Literal | ParameterReference | SelectionValue | ListLiteral | ObjectLiteral
+    Literal
+    | ParameterReference
+    | FunctionCallValue
+    | SelectionValue
+    | ListLiteral
+    | ObjectLiteral
 )
 
 

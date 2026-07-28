@@ -15,6 +15,7 @@ from .ast import (
     Expression,
     FieldDefinition,
     FunctionCallStatement,
+    FunctionCallValue,
     FunctionDeclarationStatement,
     ListLiteral,
     Literal,
@@ -41,12 +42,16 @@ from .ast import (
     VariableReferenceStatement,
     WhereOperation,
 )
+from .builtins import BUILTIN_NAMES
 from .errors import NeoQLSyntaxError
 from .lexer import Token, TokenKind, tokenize
 from .references import SelectionQueryValue
 
 ParsedExpression: TypeAlias = Expression | UpdateStatement | DeleteStatement
-SelectionValueResolver: TypeAlias = Callable[[SelectionValue], Any]
+SelectionValueResolver: TypeAlias = Callable[
+    [SelectionValue | FunctionCallValue],
+    Any,
+]
 
 
 class Parser:
@@ -270,12 +275,29 @@ class Parser:
     def _function_call(self) -> FunctionCallStatement:
         name = self._consume(TokenKind.IDENTIFIER, "Expected function name")
         self._consume(TokenKind.LEFT_PAREN, "Expected '(' after function name")
-        arguments = [self._value()]
-        while self._match(TokenKind.COMMA):
+        arguments = []
+        if not self._check(TokenKind.RIGHT_PAREN):
             arguments.append(self._value())
+            while self._match(TokenKind.COMMA):
+                arguments.append(self._value())
         end = self._consume(TokenKind.RIGHT_PAREN, "Expected ')' after arguments")
         return FunctionCallStatement(
             self._span(name, end), name.lexeme, tuple(arguments)
+        )
+
+    def _function_value(self) -> FunctionCallValue:
+        name = self._consume(TokenKind.IDENTIFIER, "Expected function name")
+        self._consume(TokenKind.LEFT_PAREN, "Expected '(' after function name")
+        arguments = []
+        if not self._check(TokenKind.RIGHT_PAREN):
+            arguments.append(self._value())
+            while self._match(TokenKind.COMMA):
+                arguments.append(self._value())
+        end = self._consume(TokenKind.RIGHT_PAREN, "Expected ')' after arguments")
+        return FunctionCallValue(
+            self._span(name, end),
+            name.lexeme,
+            tuple(arguments),
         )
 
     def _create_dataset(self) -> CreateDatasetStatement:
@@ -548,7 +570,9 @@ class Parser:
         return MethodCall(self._span(name, end), name.lexeme, tuple(arguments))
 
     def _method_argument(self) -> Value | str:
-        if self._check(TokenKind.IDENTIFIER):
+        if self._check(TokenKind.IDENTIFIER) and not self._check_next(
+            TokenKind.LEFT_PAREN
+        ):
             token = self._advance()
             if token.lexeme in self.parameters:
                 return ParameterReference(token.span, token.lexeme)
@@ -633,6 +657,17 @@ class Parser:
         )
 
     def _value(self, *, allow_selection: bool = False) -> Value:
+        if (
+            self._check(TokenKind.IDENTIFIER)
+            and self._check_next(TokenKind.LEFT_PAREN)
+            and (
+                self._peek().lexeme.lower() in BUILTIN_NAMES
+                or not allow_selection
+                or self._peek_at(2).kind
+                not in {TokenKind.LEFT_BRACE, TokenKind.RIGHT_PAREN}
+            )
+        ):
+            return self._function_value()
         if allow_selection and (
             (
                 self._check(TokenKind.IDENTIFIER)
@@ -752,6 +787,14 @@ def _value_to_python(
                 "",
             )
         return bindings[value.name]
+    if isinstance(value, FunctionCallValue):
+        if selection_resolver is not None:
+            return selection_resolver(value)
+        raise NeoQLSyntaxError(
+            "Scalar function values require a NeoQL session",
+            value.span,
+            "",
+        )
     if isinstance(value, SelectionValue):
         if selection_resolver is not None:
             return selection_resolver(value)

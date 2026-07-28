@@ -158,11 +158,30 @@ class UnknownFunctionError(ResolutionError):
 
 
 class FunctionArityError(ResolutionError):
-    def __init__(self, name: str, expected: int, actual: int):
+    def __init__(self, name: str, expected: int | str, actual: int):
         super().__init__(
             "function_arity",
             f"Function '{name}' expects {expected} arguments, received {actual}",
             details={"function": name, "expected": expected, "actual": actual},
+        )
+
+
+class FunctionTypeError(DiagnosticError):
+    def __init__(self, name: str, position: int, expected: str, actual: object):
+        super().__init__(
+            "function_type",
+            (
+                f"Function '{name}' argument {position} expects {expected}, "
+                f"received {type(actual).__name__}"
+            ),
+            category="type",
+            phase="runtime",
+            details={
+                "function": name,
+                "position": position,
+                "expected": expected,
+                "actual": type(actual).__name__,
+            },
         )
 
 

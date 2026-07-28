@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 from .ast import (
     AddSelectionStatement,
     AlgebraExpression,
     CreateDatasetStatement,
     FunctionCallStatement,
+    FunctionCallValue,
     FunctionDeclarationStatement,
     Literal,
     ObjectLiteral,
@@ -23,9 +26,16 @@ from .ast import (
     VariableAssignmentStatement,
     VariableReferenceStatement,
 )
+from .builtins import (
+    BUILTIN_NAMES,
+    BuiltinContext,
+    call_builtin,
+    default_builtin_context,
+)
 from .errors import (
     EngineError,
     FunctionArityError,
+    FunctionTypeError,
     ImmutableBindingError,
     RecursionNotAllowedError,
     UnknownFunctionError,
@@ -50,7 +60,13 @@ class FunctionDefinition:
 class NeoQLSession:
     """Execute NeoQL with session-local variables and functions."""
 
-    def __init__(self, engine: NeoDBEngine | None = None):
+    def __init__(
+        self,
+        engine: NeoDBEngine | None = None,
+        *,
+        clock: Callable[[], datetime] | None = None,
+        uuid_source: Callable[[], UUID] | None = None,
+    ):
         if engine is None:
             from engine import NeoDBEngine
 
@@ -59,6 +75,11 @@ class NeoQLSession:
         self.variables: dict[str, Any] = {}
         self.functions: dict[str, FunctionDefinition] = {}
         self._calls: list[str] = []
+        defaults = default_builtin_context()
+        self._builtin_context = BuiltinContext(
+            clock or defaults.clock,
+            uuid_source or defaults.uuid_source,
+        )
 
     def execute(self, source: str) -> Any:
         """Parse and execute one statement while preserving session bindings."""
@@ -135,7 +156,7 @@ class NeoQLSession:
                 None,
                 statement.operations,
             )
-            query = statement_to_query(pipeline, parameters)
+            query = self._compile_query(pipeline, parameters, source)
             return self._finish_selection(base.refine(query), query)
         if isinstance(statement, VariableReferenceStatement):
             if statement.name in parameters:
@@ -158,27 +179,38 @@ class NeoQLSession:
                     raise UnknownNameError(statement.dataset).with_source(
                         statement.span, source
                     )
-                query = statement_to_query(statement, parameters)
+                query = self._compile_query(statement, parameters, source)
                 return self._finish_selection(value.refine(query), query)
             if statement.dataset not in self.engine.datasets:
                 if (
                     statement.predicate is None
                     and not statement.operations
-                    and statement.dataset in self.functions
+                    and (
+                        statement.dataset in self.functions
+                        or statement.dataset.lower() in BUILTIN_NAMES
+                    )
                 ):
                     return self._call(statement.dataset, [], statement.span, source)
-            query = statement_to_query(statement, parameters)
+            query = self._compile_query(statement, parameters, source)
             return self.engine.execute_query(query)
-        query = statement_to_query(
+        query = self._compile_query(statement, parameters, source)
+        return self.engine.execute_query(query)
+
+    def _compile_query(
+        self,
+        statement: Statement,
+        parameters: Mapping[str, Any],
+        source: str,
+    ) -> dict[str, Any]:
+        return statement_to_query(
             statement,
             parameters,
-            lambda value: self._resolve_selection_value(
+            lambda value: self._resolve_embedded_value(
                 value,
                 source,
                 parameters,
             ),
         )
-        return self.engine.execute_query(query)
 
     @staticmethod
     def _require_selection(value: Any, span: Any, source: str) -> Selection:
@@ -190,6 +222,16 @@ class NeoQLSession:
                 details={"actual": type(value).__name__},
             ).with_source(span, source)
         return value
+
+    def _resolve_embedded_value(
+        self,
+        value: SelectionValue | FunctionCallValue,
+        source: str,
+        parameters: Mapping[str, Any],
+    ) -> Any:
+        if isinstance(value, SelectionValue):
+            return self._resolve_selection_value(value, source, parameters)
+        return self._value(value, parameters, source)
 
     def _resolve_selection_value(
         self,
@@ -216,6 +258,15 @@ class NeoQLSession:
     ) -> Any:
         definition = self.functions.get(name)
         if definition is None:
+            if name.lower() in BUILTIN_NAMES:
+                try:
+                    return call_builtin(
+                        name,
+                        arguments,
+                        self._builtin_context,
+                    )
+                except (FunctionArityError, FunctionTypeError) as error:
+                    raise error.with_source(span, source) from None
             raise UnknownFunctionError(name).with_source(span, source)
         declaration = definition.declaration
         if len(arguments) != len(declaration.parameters):
@@ -251,6 +302,12 @@ class NeoQLSession:
             return parameters[value.name]
         if isinstance(value, Literal):
             return value.value
+        if isinstance(value, FunctionCallValue):
+            arguments = [
+                self._value(argument, parameters, source)
+                for argument in value.arguments
+            ]
+            return self._call(value.name, arguments, value.span, source)
         if isinstance(value, ObjectLiteral):
             return {
                 field.name: self._value(field.value, parameters, source)
