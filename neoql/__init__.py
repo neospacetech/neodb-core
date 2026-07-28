@@ -18,12 +18,20 @@ from .ast import (
     SelectionValue,
     Statement,
     TraversalOperation,
+    TypeValue,
     UpdateStatement,
     VariableAssignmentStatement,
     VariableReferenceStatement,
     WhereOperation,
 )
-from .builtins import BUILTIN_NAMES, BUILTINS, BuiltinContext, BuiltinFunction
+from .builtins import (
+    BUILTIN_NAMES,
+    BUILTINS,
+    VALUE_CONSTRUCTORS,
+    VALUE_FUNCTION_NAMES,
+    BuiltinContext,
+    BuiltinFunction,
+)
 from .errors import (
     AmbiguousReferenceError,
     DatasetAlreadyExistsError,
@@ -167,11 +175,14 @@ __all__ = [
     "TokenKind",
     "TypeDescriptor",
     "TypeKind",
+    "TypeValue",
     "UnknownFieldError",
     "UnknownFunctionError",
     "UnknownNameError",
     "UnsupportedDatasetError",
     "UniquePlan",
+    "VALUE_CONSTRUCTORS",
+    "VALUE_FUNCTION_NAMES",
     "UpdateStatement",
     "VariableAssignmentStatement",
     "VariableReferenceStatement",

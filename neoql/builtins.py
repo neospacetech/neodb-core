@@ -28,15 +28,19 @@ class BuiltinFunction:
 
     name: str
     minimum_arity: int
-    maximum_arity: int
+    maximum_arity: int | None
     implementation: BuiltinImplementation
 
     def call(self, arguments: list[Any], context: BuiltinContext) -> Any:
         actual = len(arguments)
-        if not self.minimum_arity <= actual <= self.maximum_arity:
+        if actual < self.minimum_arity or (
+            self.maximum_arity is not None and actual > self.maximum_arity
+        ):
             expected: int | str
             if self.minimum_arity == self.maximum_arity:
                 expected = self.minimum_arity
+            elif self.maximum_arity is None:
+                expected = f"at least {self.minimum_arity}"
             else:
                 expected = f"{self.minimum_arity} or {self.maximum_arity}"
             raise FunctionArityError(self.name, expected, actual)
@@ -53,6 +57,17 @@ def call_builtin(
     context: BuiltinContext,
 ) -> Any:
     function = BUILTINS.get(name.lower())
+    if function is None:
+        raise KeyError(name)
+    return function.call(arguments, context)
+
+
+def call_value_function(
+    name: str,
+    arguments: list[Any],
+    context: BuiltinContext,
+) -> Any:
+    function = VALUE_FUNCTIONS.get(name.lower())
     if function is None:
         raise KeyError(name)
     return function.call(arguments, context)
@@ -160,6 +175,78 @@ def _uuid(_arguments: list[Any], context: BuiltinContext) -> UUID:
     return context.uuid_source()
 
 
+def _expanded_constructor_arguments(arguments: list[Any]) -> list[Any]:
+    from .references import SelectionRecordsValue
+
+    expanded: list[Any] = []
+    for argument in arguments:
+        if isinstance(argument, SelectionRecordsValue):
+            expanded.extend(
+                SelectionRecordsValue(argument.dataset, (record,))
+                for record in argument.records
+            )
+        else:
+            expanded.append(argument)
+    return expanded
+
+
+def _list(arguments: list[Any], _context: BuiltinContext) -> list[Any]:
+    return _expanded_constructor_arguments(arguments)
+
+
+def _set(arguments: list[Any], _context: BuiltinContext) -> Any:
+    from .references import SelectionRecordsValue
+
+    values = _expanded_constructor_arguments(arguments)
+    if any(isinstance(value, SelectionRecordsValue) for value in values):
+        return values
+    try:
+        return set(values)
+    except TypeError as error:
+        position, invalid = next(
+            (
+                (index, value)
+                for index, value in enumerate(values, start=1)
+                if not _is_hashable(value)
+            ),
+            (1, values),
+        )
+        raise FunctionTypeError(
+            "set",
+            position,
+            "hashable constructor values",
+            invalid,
+        ) from error
+
+
+def _tuple(arguments: list[Any], _context: BuiltinContext) -> tuple[Any, ...]:
+    return tuple(_expanded_constructor_arguments(arguments))
+
+
+def _map(arguments: list[Any], _context: BuiltinContext) -> dict[Any, Any]:
+    value = arguments[0]
+    if not isinstance(value, Mapping):
+        raise FunctionTypeError("map", 1, "object", value)
+    return dict(value)
+
+
+def _cast(arguments: list[Any], _context: BuiltinContext) -> Any:
+    from .types import TypeDescriptor, cast_value
+
+    target = arguments[1]
+    if not isinstance(target, TypeDescriptor):
+        raise FunctionTypeError("cast", 2, "type expression", target)
+    return cast_value(arguments[0], target)
+
+
+def _is_hashable(value: Any) -> bool:
+    try:
+        hash(value)
+    except TypeError:
+        return False
+    return True
+
+
 BUILTINS: Mapping[str, BuiltinFunction] = {
     function.name: function
     for function in (
@@ -179,3 +266,20 @@ BUILTINS: Mapping[str, BuiltinFunction] = {
     )
 }
 BUILTIN_NAMES = frozenset(BUILTINS)
+
+VALUE_CONSTRUCTORS: Mapping[str, BuiltinFunction] = {
+    function.name: function
+    for function in (
+        BuiltinFunction("list", 0, None, _list),
+        BuiltinFunction("set", 0, None, _set),
+        BuiltinFunction("tuple", 0, None, _tuple),
+        BuiltinFunction("map", 1, 1, _map),
+        BuiltinFunction("cast", 2, 2, _cast),
+    )
+}
+VALUE_FUNCTIONS: Mapping[str, BuiltinFunction] = {
+    **BUILTINS,
+    **VALUE_CONSTRUCTORS,
+}
+VALUE_FUNCTION_NAMES = frozenset(VALUE_FUNCTIONS)
+SELECTION_VALUE_CONSTRUCTORS = frozenset({"list", "set", "tuple"})

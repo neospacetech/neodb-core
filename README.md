@@ -627,7 +627,40 @@ The graph planner may optimize matching automatically.
 ## 25. Type inference
 
 NeoQL infers references, literals, datasets, graph edges, and collection types
-where possible. Explicit casting remains available.
+where possible. Use `cast(value, Type)` when the target must be explicit:
+
+```neoql
+cast("42", int)
+cast(["1", "2"], list(int))
+cast(null, nullable(uuid))
+cast({first="1"}, map(str(20), int))
+```
+
+The target uses the same primitive, composite, enum, nullable, and dataset
+reference type grammar as schema fields. Casts reuse normal schema conversion
+rules and raise a source-located `type_mismatch` diagnostic on failure.
+
+NeoQL also provides explicit value constructors:
+
+```neoql
+list(1, 2, 2)
+set(1, 2, 2)
+tuple(1, "two", true)
+map({first=1, second=2})
+```
+
+`list` and `tuple` preserve argument order. `set` removes duplicates and
+requires hashable scalar values when evaluated directly. `map` accepts one
+object, uses its identifier names as string keys, preserves key insertion
+order, and uses the final value if a key is repeated. Empty list, set, and
+tuple constructors are valid; `null` is an ordinary constructor element.
+Constructors can be nested and used in records, predicates, defaults,
+Selection method arguments, and function bodies.
+
+Selection arguments inside `list`, `set`, or `tuple` remain tagged with their
+source dataset until a typed reference field resolves them. A Selection
+expands in stable record order; scalar tuple positions still require one
+record, and reference target mismatches raise `reference_conflict`.
 
 ## 26. Transactions
 
@@ -702,9 +735,10 @@ wherever the AST accepts scalar values, including records, predicates,
 Selection method arguments, and user-defined function bodies.
 
 For an ambiguous zero-argument `name()`, resolution order is a declared
-dataset, then a user-defined function, then a built-in. This preserves existing
-bindings while keeping the built-in registry available as the fallback.
-Sessions accept injectable clock and UUID providers for deterministic tests.
+dataset, then a user-defined function, then a built-in or value constructor.
+This preserves existing bindings while keeping the language registry available
+as the fallback. Sessions accept injectable clock and UUID providers for
+deterministic tests.
 
 `distance()` and `similarity()` are Selection methods rather than scalar
 built-ins.

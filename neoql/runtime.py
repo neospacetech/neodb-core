@@ -22,14 +22,15 @@ from .ast import (
     SelectionStatement,
     SelectionValue,
     Statement,
+    TypeValue,
     Value,
     VariableAssignmentStatement,
     VariableReferenceStatement,
 )
 from .builtins import (
-    BUILTIN_NAMES,
+    VALUE_FUNCTION_NAMES,
     BuiltinContext,
-    call_builtin,
+    call_value_function,
     default_builtin_context,
 )
 from .errors import (
@@ -44,6 +45,7 @@ from .errors import (
 from .parser import parse_statement, statement_to_query
 from .references import SelectionRecordsValue
 from .selection import Selection
+from .types import NeoQLTypeError, resolve_type
 
 if TYPE_CHECKING:
     from engine import NeoDBEngine
@@ -187,7 +189,7 @@ class NeoQLSession:
                     and not statement.operations
                     and (
                         statement.dataset in self.functions
-                        or statement.dataset.lower() in BUILTIN_NAMES
+                        or statement.dataset.lower() in VALUE_FUNCTION_NAMES
                     )
                 ):
                     return self._call(statement.dataset, [], statement.span, source)
@@ -258,14 +260,18 @@ class NeoQLSession:
     ) -> Any:
         definition = self.functions.get(name)
         if definition is None:
-            if name.lower() in BUILTIN_NAMES:
+            if name.lower() in VALUE_FUNCTION_NAMES:
                 try:
-                    return call_builtin(
+                    return call_value_function(
                         name,
                         arguments,
                         self._builtin_context,
                     )
-                except (FunctionArityError, FunctionTypeError) as error:
+                except (
+                    FunctionArityError,
+                    FunctionTypeError,
+                    NeoQLTypeError,
+                ) as error:
                     raise error.with_source(span, source) from None
             raise UnknownFunctionError(name).with_source(span, source)
         declaration = definition.declaration
@@ -302,6 +308,11 @@ class NeoQLSession:
             return parameters[value.name]
         if isinstance(value, Literal):
             return value.value
+        if isinstance(value, TypeValue):
+            try:
+                return resolve_type(value.type_ref)
+            except NeoQLTypeError as error:
+                raise error.with_source(value.span, source) from None
         if isinstance(value, FunctionCallValue):
             arguments = [
                 self._value(argument, parameters, source)

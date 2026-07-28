@@ -43,6 +43,11 @@ class FunctionCallValue(Node):
 
 
 @dataclass(frozen=True, slots=True)
+class TypeValue(Node):
+    type_ref: "TypeRef"
+
+
+@dataclass(frozen=True, slots=True)
 class SelectionValue(Node):
     expression: "Expression"
 
@@ -61,6 +66,7 @@ Value: TypeAlias = (
     Literal
     | ParameterReference
     | FunctionCallValue
+    | TypeValue
     | SelectionValue
     | ListLiteral
     | ObjectLiteral

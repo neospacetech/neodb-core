@@ -38,13 +38,14 @@ from .ast import (
     Statement,
     TraversalOperation,
     TypeRef,
+    TypeValue,
     UpdateStatement,
     Value,
     VariableAssignmentStatement,
     VariableReferenceStatement,
     WhereOperation,
 )
-from .builtins import BUILTIN_NAMES
+from .builtins import SELECTION_VALUE_CONSTRUCTORS, VALUE_FUNCTION_NAMES
 from .errors import NeoQLSyntaxError
 from .lexer import Token, TokenKind, tokenize
 from .references import SelectionQueryValue
@@ -169,8 +170,14 @@ class Parser:
         if (
             self._check(TokenKind.IDENTIFIER)
             and self._check_next(TokenKind.LEFT_PAREN)
-            and self._peek_at(2).kind
-            not in {TokenKind.LEFT_BRACE, TokenKind.RIGHT_PAREN}
+            and (
+                self._peek_at(2).kind
+                not in {TokenKind.LEFT_BRACE, TokenKind.RIGHT_PAREN}
+                or (
+                    self._peek().lexeme.lower() in VALUE_FUNCTION_NAMES
+                    and self._peek_at(2).kind == TokenKind.LEFT_BRACE
+                )
+            )
         ):
             call = self._function_call()
             return self._pipeline(call, call.span)
@@ -282,11 +289,7 @@ class Parser:
     def _function_call(self) -> FunctionCallStatement:
         name = self._consume(TokenKind.IDENTIFIER, "Expected function name")
         self._consume(TokenKind.LEFT_PAREN, "Expected '(' after function name")
-        arguments = []
-        if not self._check(TokenKind.RIGHT_PAREN):
-            arguments.append(self._value())
-            while self._match(TokenKind.COMMA):
-                arguments.append(self._value())
+        arguments = self._function_arguments(name.lexeme)
         end = self._consume(TokenKind.RIGHT_PAREN, "Expected ')' after arguments")
         return FunctionCallStatement(
             self._span(name, end), name.lexeme, tuple(arguments)
@@ -295,17 +298,29 @@ class Parser:
     def _function_value(self) -> FunctionCallValue:
         name = self._consume(TokenKind.IDENTIFIER, "Expected function name")
         self._consume(TokenKind.LEFT_PAREN, "Expected '(' after function name")
-        arguments = []
-        if not self._check(TokenKind.RIGHT_PAREN):
-            arguments.append(self._value())
-            while self._match(TokenKind.COMMA):
-                arguments.append(self._value())
+        arguments = self._function_arguments(name.lexeme)
         end = self._consume(TokenKind.RIGHT_PAREN, "Expected ')' after arguments")
         return FunctionCallValue(
             self._span(name, end),
             name.lexeme,
             tuple(arguments),
         )
+
+    def _function_arguments(self, name: str) -> list[Value]:
+        if self._check(TokenKind.RIGHT_PAREN):
+            return []
+        allow_selection = name.lower() in SELECTION_VALUE_CONSTRUCTORS
+        arguments = [self._value(allow_selection=allow_selection)]
+        if name.lower() == "cast":
+            if self._match(TokenKind.COMMA):
+                type_ref = self._type_ref()
+                arguments.append(TypeValue(type_ref.span, type_ref))
+                while self._match(TokenKind.COMMA):
+                    arguments.append(self._value())
+            return arguments
+        while self._match(TokenKind.COMMA):
+            arguments.append(self._value(allow_selection=allow_selection))
+        return arguments
 
     def _create_dataset(self) -> CreateDatasetStatement:
         start = self._previous()
@@ -726,7 +741,7 @@ class Parser:
             self._check(TokenKind.IDENTIFIER)
             and self._check_next(TokenKind.LEFT_PAREN)
             and (
-                self._peek().lexeme.lower() in BUILTIN_NAMES
+                self._peek().lexeme.lower() in VALUE_FUNCTION_NAMES
                 or not allow_selection
                 or self._peek_at(2).kind
                 not in {TokenKind.LEFT_BRACE, TokenKind.RIGHT_PAREN}
@@ -857,6 +872,12 @@ def _value_to_python(
             return selection_resolver(value)
         raise NeoQLSyntaxError(
             "Scalar function values require a NeoQL session",
+            value.span,
+            "",
+        )
+    if isinstance(value, TypeValue):
+        raise NeoQLSyntaxError(
+            "Type expressions are only valid inside cast()",
             value.span,
             "",
         )
