@@ -356,6 +356,21 @@ manager={
 NeoDB detects the destination dataset, inserts the object if required, and
 stores its reference.
 
+References are stored as immutable `ReferenceValue` instances containing the
+target dataset and identity fields. Table identity uses the primary key when
+available, then declared unique fields; graph and key/value identity use `id`
+and `key`. A scalar reference is accepted only for a single-field primary key.
+Inline objects reuse an existing record when one identity matches, otherwise
+they are inserted into the destination dataset in the same transaction.
+
+Reference collections work recursively in `list`, `set`, `tuple`, and `map`
+types. Referenced datasets must already exist when the source schema is
+created, except for a self-reference. Targets without a primary or unique
+identity are rejected. Missing, ambiguous, conflicting, and cyclic references
+use the stable diagnostic codes `missing_reference`, `ambiguous_reference`,
+`reference_conflict`, and `reference_cycle`. If source validation fails after
+an inline insert, the destination insert is rolled back.
+
 ## 14. Graph links
 
 ```neoql

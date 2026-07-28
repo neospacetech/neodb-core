@@ -26,7 +26,14 @@ SUPPORTED_CONSTRAINTS = frozenset(
         "readonly",
     }
 )
-_MISSING = object()
+
+
+class _MissingValue:
+    def __deepcopy__(self, memo: Any) -> "_MissingValue":
+        return self
+
+
+_MISSING = _MissingValue()
 
 
 class SchemaDefinitionError(DiagnosticError):

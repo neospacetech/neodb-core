@@ -13,6 +13,7 @@ from .ast import (
     Logical,
     MethodCall,
     Negation,
+    ObjectLiteral,
     Predicate,
     Projection,
     ProjectionField,
@@ -105,8 +106,8 @@ class Parser:
             if lowered not in {"true", "false", "null", "none"}:
                 return self._type_ref()
         value = self._value()
-        if isinstance(value, ListLiteral):
-            self._error(self._previous(), "Type arguments cannot be lists")
+        if not isinstance(value, Literal):
+            self._error(self._previous(), "Type arguments must be scalar")
         return value
 
     def _constraint(self) -> Constraint:
@@ -313,18 +314,15 @@ class Parser:
             start = self._previous()
             values = []
             if not self._check(TokenKind.RIGHT_BRACKET):
-                values.append(self._scalar_value())
+                values.append(self._value())
                 while self._match(TokenKind.COMMA):
-                    values.append(self._scalar_value())
+                    values.append(self._value())
             end = self._consume(TokenKind.RIGHT_BRACKET, "Expected ']' after list")
             return ListLiteral(self._span(start, end), tuple(values))
+        if self._check(TokenKind.LEFT_BRACE):
+            record = self._record()
+            return ObjectLiteral(record.span, record.fields)
         self._error(self._peek(), "Expected literal value")
-
-    def _scalar_value(self) -> Literal:
-        value = self._value()
-        if isinstance(value, ListLiteral):
-            self._error(self._previous(), "Nested list literals are not supported")
-        return value
 
     def _keyword(self, keyword: str) -> bool:
         if self._check(TokenKind.IDENTIFIER) and self._peek().lexeme.lower() == keyword:
@@ -378,6 +376,8 @@ def parse_statement(source: str) -> Statement:
 def _value_to_python(value: Value) -> Any:
     if isinstance(value, ListLiteral):
         return [_value_to_python(item) for item in value.values]
+    if isinstance(value, ObjectLiteral):
+        return {field.name: _value_to_python(field.value) for field in value.fields}
     return value.value
 
 

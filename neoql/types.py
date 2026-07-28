@@ -12,6 +12,7 @@ from uuid import UUID
 from .ast import CreateDatasetStatement, Literal, TypeRef
 from .errors import DiagnosticError
 from .parser import parse_statement
+from .references import ReferenceValue
 
 
 class NeoQLTypeError(DiagnosticError):
@@ -246,6 +247,8 @@ def parse_type(source: str) -> TypeDescriptor:
 
 def infer_type(value: Any) -> TypeDescriptor:
     """Infer a NeoQL type from a Python literal value."""
+    if isinstance(value, ReferenceValue):
+        return TypeDescriptor(TypeKind.REFERENCE, (value.dataset,))
     if value is None:
         raise NeoQLTypeError("Cannot infer a type from null without context")
     if isinstance(value, bool):
@@ -388,7 +391,14 @@ def cast_value(value: Any, target: TypeDescriptor) -> Any:
                 raise NeoQLTypeError(f"{value!r} is not a member of {target.display()}")
             return value
         if target.kind == TypeKind.REFERENCE:
-            raise NeoQLTypeError("Reference casting requires a dataset resolver")
+            if not isinstance(value, ReferenceValue):
+                raise NeoQLTypeError("Reference casting requires a dataset resolver")
+            dataset = target.arguments[0]
+            if value.dataset != dataset:
+                raise NeoQLTypeError(
+                    f"Reference targets {value.dataset}, expected {dataset}"
+                )
+            return value
     except (TypeError, ValueError, OverflowError) as error:
         raise NeoQLTypeError(f"Cannot cast {value!r} to {target.display()}") from error
     raise NeoQLTypeError(f"Unsupported target type {target.display()}")

@@ -191,6 +191,33 @@ class MissingReferenceError(EngineError):
         )
 
 
+class AmbiguousReferenceError(EngineError):
+    def __init__(self, dataset: str, value: Any):
+        super().__init__(
+            "ambiguous_reference",
+            f"Reference identity is ambiguous in dataset '{dataset}'",
+            details={"dataset": dataset, "value": value},
+        )
+
+
+class ReferenceCycleError(EngineError):
+    def __init__(self, path: list[str]):
+        super().__init__(
+            "reference_cycle",
+            "Cyclic inline reference detected",
+            details={"path": path},
+        )
+
+
+class ReferenceConflictError(EngineError):
+    def __init__(self, dataset: str, fields: list[str]):
+        super().__init__(
+            "reference_conflict",
+            f"Inline reference conflicts with dataset '{dataset}'",
+            details={"dataset": dataset, "fields": fields},
+        )
+
+
 class QueryTimeoutError(EngineError):
     def __init__(self, timeout_ms: int):
         super().__init__(

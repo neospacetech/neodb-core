@@ -4,6 +4,7 @@ from decimal import Decimal
 from uuid import UUID
 
 from cli.__main__ import parse_cli_command
+from neoql.references import ReferenceValue
 from neoql.types import (
     NeoQLTypeError,
     TypeDescriptor,
@@ -147,6 +148,9 @@ class CastingTests(unittest.TestCase):
             cast_value(5, parse_type("duration")),
             timedelta(seconds=5),
         )
+        reference = ReferenceValue("users", (("id", 1),))
+        self.assertEqual(cast_value(reference, parse_type("users")), reference)
+        self.assertEqual(infer_type(reference), parse_type("users"))
         self.assertEqual(
             cast_value(str(UUID(int=0)), parse_type("uuid")),
             UUID(int=0),

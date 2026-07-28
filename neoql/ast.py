@@ -33,10 +33,15 @@ class Literal(Node):
 
 @dataclass(frozen=True, slots=True)
 class ListLiteral(Node):
-    values: tuple[Literal, ...]
+    values: tuple["Value", ...]
 
 
-Value: TypeAlias = Literal | ListLiteral
+@dataclass(frozen=True, slots=True)
+class ObjectLiteral(Node):
+    fields: tuple["RecordField", ...]
+
+
+Value: TypeAlias = Literal | ListLiteral | ObjectLiteral
 
 
 @dataclass(frozen=True, slots=True)

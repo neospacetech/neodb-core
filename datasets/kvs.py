@@ -8,7 +8,8 @@ class KVSDataset(BaseDataset):
         BaseDataset (BaseDataset): The base dataset class.
     """
 
-    def __init__(self):
+    def __init__(self, name="kvs"):
+        self.name = name
         self.store = {}
 
     def set(self, key, value):

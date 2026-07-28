@@ -3,10 +3,12 @@
 from .ast import (
     AddStatement,
     CreateDatasetStatement,
+    ObjectLiteral,
     SelectionStatement,
     Statement,
 )
 from .errors import (
+    AmbiguousReferenceError,
     DatasetAlreadyExistsError,
     DatasetNotFoundError,
     DeadlockError,
@@ -17,6 +19,8 @@ from .errors import (
     NeoQLSyntaxError,
     PermissionDeniedError,
     QueryTimeoutError,
+    ReferenceConflictError,
+    ReferenceCycleError,
     UnknownFieldError,
     UnsupportedDatasetError,
     span_to_dict,
@@ -29,6 +33,7 @@ from .predicates import (
     evaluate_predicate,
     validate_predicate,
 )
+from .references import ReferenceValue
 from .schema import (
     ConstraintViolation,
     DatasetSchema,
@@ -62,6 +67,7 @@ from .types import (
 
 __all__ = [
     "AddStatement",
+    "AmbiguousReferenceError",
     "AlgebraPlan",
     "CreateDatasetStatement",
     "ConstraintViolation",
@@ -82,6 +88,7 @@ __all__ = [
     "NeoQLSyntaxError",
     "NeoQLTypeError",
     "OffsetPlan",
+    "ObjectLiteral",
     "OrderPlan",
     "MissingReferenceError",
     "PermissionDeniedError",
@@ -89,6 +96,9 @@ __all__ = [
     "PredicateEvaluationError",
     "ProjectionPlan",
     "QueryTimeoutError",
+    "ReferenceConflictError",
+    "ReferenceCycleError",
+    "ReferenceValue",
     "ReversePlan",
     "SelectionStatement",
     "SchemaDefinitionError",
