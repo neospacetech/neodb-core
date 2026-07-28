@@ -51,33 +51,34 @@ class CLIErrorTests(unittest.TestCase):
 class TransactionShellTests(unittest.TestCase):
     def setUp(self):
         self.engine = NeoDBEngine()
-        self.transactions = {"active": ""}
 
     @patch("builtins.print")
-    def test_commit_executes_queued_queries(self, _output):
-        transaction_id = execute_cli_command(self.engine, "begin", self.transactions)
-        self.assertEqual(self.transactions["active"], transaction_id)
-        self.assertIsNone(
+    def test_commit_publishes_engine_transaction(self, _output):
+        transaction_id = execute_cli_command(self.engine, "begin")
+        self.assertEqual(self.engine.active_transaction_id, transaction_id)
+        self.assertEqual(
             execute_cli_command(
                 self.engine,
                 "create dataset users(table{id(int, pk)})",
-                self.transactions,
-            )
+            ),
+            {"status": "success", "dataset": "users"},
         )
-        result = execute_cli_command(self.engine, "commit", self.transactions)
-        self.assertEqual(result, [{"status": "success", "dataset": "users"}])
-        self.assertEqual(self.transactions, {"active": ""})
+        self.assertEqual(execute_cli_command(self.engine, "commit"), transaction_id)
+        self.assertEqual(self.engine.transaction_depth, 0)
+        self.assertIn("users", self.engine.datasets)
 
     @patch("builtins.print")
-    def test_abort_discards_queued_queries(self, _output):
-        transaction_id = execute_cli_command(
-            self.engine, "start transaction", self.transactions
+    def test_abort_discards_engine_transaction(self, _output):
+        transaction_id = execute_cli_command(self.engine, "start transaction")
+        execute_cli_command(
+            self.engine,
+            "create dataset temporary(table{id(int)})",
         )
         self.assertEqual(
-            execute_cli_command(self.engine, "abort transaction", self.transactions),
+            execute_cli_command(self.engine, "abort transaction"),
             transaction_id,
         )
-        self.assertEqual(self.transactions, {"active": ""})
+        self.assertNotIn("temporary", self.engine.datasets)
 
     @patch("builtins.print")
     def test_shell_exits_on_quit_or_eof(self, _output):

@@ -516,7 +516,16 @@ transaction{
 }
 ```
 
-Nested transactions are supported.
+Transactions execute against private copy-on-write dataset frames. An outer
+commit publishes its frame atomically; abort or an execution error discards
+it. A nested transaction is a savepoint: its commit merges into its parent,
+while its abort discards only nested work. Only the innermost frame may be
+completed. `rollback` and `abort transaction` are aliases.
+
+Selections bind to the dataset snapshot visible when they are created. This
+keeps selections created before `begin` isolated from staged writes. A
+`transaction{...}` block and an engine `batch` are implicit atomic
+transactions, so a failed constraint cannot leave earlier mutations applied.
 
 ## 26. Functions
 

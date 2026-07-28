@@ -6,7 +6,6 @@ This module provides a command-line interface for interacting with the NeoDB eng
 import argparse
 import json
 import sys
-import uuid
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -147,7 +146,25 @@ def parse_cli_command(cmd: str):
     if cmd.lower().startswith("help"):
         show_help()
         return {}
-    return statement_to_query(parse_statement(cmd))
+    return compile_source(cmd)
+
+
+def compile_source(source: str):
+    """Compile one statement or transaction block into the engine contract."""
+    stripped = source.strip()
+    lowered = stripped.lower()
+    if lowered.startswith("transaction"):
+        prefix = stripped[: stripped.find("{")].strip().lower()
+        if prefix != "transaction" or not stripped.endswith("}"):
+            return statement_to_query(parse_statement(source))
+        body = stripped[stripped.find("{") + 1 : -1]
+        return {
+            "action": "transaction",
+            "queries": [
+                compile_source(statement.source) for statement in split_script(body)
+            ],
+        }
+    return statement_to_query(parse_statement(source))
 
 
 def print_diagnostic(error: DiagnosticError, *, filename: str | None = None) -> None:
@@ -177,53 +194,33 @@ def execute_cli_command(engine: NeoDBEngine, cmd: str, transaction_space=None):
         list: Query results or None.
     """
     if cmd.lower().strip() in ("begin", "start transaction"):
-        transaction_id = str(uuid.uuid4())
-        if isinstance(transaction_space, dict):
-            if transaction_space["active"] != "":
-                print("Another transaction is already active.")
-                return None
-            transaction_space["active"] = transaction_id
-            transaction_space[transaction_id] = []
+        transaction_id = engine.begin_transaction()
         print(f"Transaction started with ID: {transaction_id}")
         return transaction_id
-    elif cmd.lower().strip() == "end transaction":
-        if isinstance(transaction_space, dict):
-            if transaction_space["active"] == "":
-                print("No active transaction to end.")
-                return None
-            transaction_id = transaction_space["active"]
-            transaction_space["active"] = ""
-            return transaction_id
-    elif cmd.lower().strip().startswith("commit"):
-        if isinstance(transaction_space, dict):
-            if " " in cmd:
-                transaction_id = cmd.split(" ", 1)[1].strip()
-            else:
-                if transaction_space["active"] == "":
-                    print("No active transaction to commit.")
-                    return None
-                transaction_id = transaction_space["active"]
-                execute_cli_command(engine, "end transaction", transaction_space)
-            output = run(
-                engine,
-                {
-                    "action": "batch",
-                    "queries": list(transaction_space[transaction_id]),
-                },
-            )
-            del transaction_space[transaction_id]
-            print(f"Transaction {transaction_id} committed.")
-            return output
-    elif cmd.lower().strip() == "abort transaction":
-        if isinstance(transaction_space, dict):
-            if transaction_space["active"] == "":
-                print("No active transaction to abort.")
-                return None
-            transaction_id = transaction_space["active"]
-            transaction_space["active"] = ""
-            del transaction_space[transaction_id]
-            print(f"Transaction {transaction_id} aborted.")
-            return transaction_id
+    if cmd.lower().strip().startswith("commit") or cmd.lower().strip() == (
+        "end transaction"
+    ):
+        parts = cmd.split(maxsplit=1)
+        requested = (
+            parts[1].strip()
+            if len(parts) == 2 and parts[0].lower() == "commit"
+            else None
+        )
+        try:
+            transaction_id = engine.commit_transaction(requested)
+        except DiagnosticError as error:
+            print_diagnostic(error)
+            return None
+        print(f"Transaction {transaction_id} committed.")
+        return transaction_id
+    if cmd.lower().strip() in {"abort", "abort transaction", "rollback"}:
+        try:
+            transaction_id = engine.abort_transaction()
+        except DiagnosticError as error:
+            print_diagnostic(error)
+            return None
+        print(f"Transaction {transaction_id} aborted.")
+        return transaction_id
 
     try:
         json_query = parse_cli_command(cmd)
@@ -231,9 +228,6 @@ def execute_cli_command(engine: NeoDBEngine, cmd: str, transaction_space=None):
         print_diagnostic(error)
         return None
     if not json_query:
-        return None
-    if transaction_space and transaction_space["active"] != "":
-        transaction_space[transaction_space["active"]].append(json_query)
         return None
     return run(engine, json_query)
 
@@ -274,7 +268,7 @@ def run_script(path: str | Path, engine: NeoDBEngine | None = None) -> int:
     for statement in split_script(source):
         located_source = "\n" * (statement.start_line - 1) + statement.source
         try:
-            query = statement_to_query(parse_statement(located_source))
+            query = compile_source(located_source)
             result = runtime.execute_query(query)
             if isinstance(result, Selection):
                 result = result.consume()
