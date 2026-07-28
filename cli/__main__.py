@@ -33,6 +33,61 @@ NeoDB CLI - Available commands:
 }
 
 
+def split_top_level(value: str, delimiter: str = ","):
+    """Split text on a delimiter, ignoring quoted and nested occurrences."""
+    parts = []
+    current = []
+    depth = 0
+    quote = None
+    escaped = False
+    for char in value:
+        if escaped:
+            current.append(char)
+            escaped = False
+            continue
+        if char == "\\" and quote:
+            current.append(char)
+            escaped = True
+            continue
+        if char in ('"', "'"):
+            if quote == char:
+                quote = None
+            elif quote is None:
+                quote = char
+            current.append(char)
+            continue
+        if quote is None:
+            if char in "({[":
+                depth += 1
+            elif char in ")}]":
+                depth -= 1
+            if char == delimiter and depth == 0:
+                parts.append("".join(current).strip())
+                current = []
+                continue
+        current.append(char)
+    if current:
+        parts.append("".join(current).strip())
+    return parts
+
+
+def parse_literal(value: str):
+    """Parse a NeoQL scalar literal into its Python representation."""
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+        return bytes(value[1:-1], "utf-8").decode("unicode_escape")
+    if re.fullmatch(r"-?\d+", value):
+        return int(value)
+    if re.fullmatch(r"-?(?:\d+\.\d*|\d*\.\d+)", value):
+        return float(value)
+    lowered = value.lower()
+    if lowered in ("true", "false"):
+        return lowered == "true"
+    if lowered in ("null", "none"):
+        return None
+    return value
+
+
 def show_help(command=None):
     """
     Prints help text.
@@ -53,21 +108,7 @@ def parse_schema(schema_str: str):
     """
     schema = {}
     
-    parts = []
-    bracket_level = 0
-    current = ""
-    for c in schema_str:
-        if c == "(":
-            bracket_level += 1
-        elif c == ")":
-            bracket_level -= 1
-        if c == "," and bracket_level == 0:
-            parts.append(current.strip())
-            current = ""
-        else:
-            current += c
-    if current:
-        parts.append(current.strip())
+    parts = split_top_level(schema_str)
 
     for field_def in parts:
         if "(" not in field_def or not field_def.endswith(")"):
@@ -75,21 +116,7 @@ def parse_schema(schema_str: str):
         field_name = field_def[:field_def.index("(")].strip()
         props_str = field_def[field_def.index("(")+1:-1].strip()
 
-        props = []
-        current_prop = ""
-        nested = 0
-        for ch in props_str:
-            if ch == "(":
-                nested += 1
-            elif ch == ")":
-                nested -= 1
-            if ch == "," and nested == 0:
-                props.append(current_prop.strip())
-                current_prop = ""
-            else:
-                current_prop += ch
-        if current_prop:
-            props.append(current_prop.strip())
+        props = split_top_level(props_str)
 
         # First prop is type
         schema[field_name] = {"type": props[0]}
@@ -106,14 +133,12 @@ def parse_object(obj_str: str):
     """
     obj = {}
     obj_str = obj_str.strip("{} ")
-    for pair in obj_str.split(","):
-        key, value = pair.split("=")
+    for pair in split_top_level(obj_str):
+        key, separator, value = pair.partition("=")
+        if not separator:
+            raise ValueError(f"Invalid record field: {pair}")
         key = key.strip()
-        value = value.strip()
-        # convert numeric values if possible
-        if re.match(r"^\d+(\.\d+)?$", value):
-            value = float(value) if "." in value else int(value)
-        obj[key] = value
+        obj[key] = parse_literal(value)
     return obj
 
 
@@ -122,33 +147,51 @@ def parse_objects_list(objs_str: str):
     Parse multiple objects separated by commas
     """
     objs = []
-    # Split on "}, {" while keeping braces balanced
-    parts = re.findall(r"\{.*?\}", objs_str)
-    for p in parts:
-        objs.append(parse_object(p))
+    for part in split_top_level(objs_str):
+        if not (part.startswith("{") and part.endswith("}")):
+            raise ValueError(f"Invalid record: {part}")
+        objs.append(parse_object(part))
     return objs
 
 
 def parse_filters(filter_str: str):
     """
     Parse filters like {age>20, score>=3.5} or {id=1}
-    MVP: only AND supported
+    Supports &&, ||, comparison operators, and common string operators.
     """
+    if filter_str is None:
+        return None
     filter_str = filter_str.strip("{} ")
+    if not filter_str:
+        return None
+    or_parts = re.split(r"\s*\|\|\s*", filter_str)
+    if len(or_parts) > 1:
+        return {"or": [parse_filters(part) for part in or_parts]}
+    and_parts = re.split(r"\s*(?:&&|,)\s*", filter_str)
+    if len(and_parts) > 1:
+        return {"and": [parse_filters(part) for part in and_parts]}
+    if filter_str.startswith("!"):
+        return {"not": parse_filters(filter_str[1:].strip())}
+
     conditions = []
-    for cond in filter_str.split(","):
+    for cond in [filter_str]:
         cond = cond.strip()
-        # detect operator
-        op_match = re.search(r"(<=|>=|!=|=|<|>)", cond)
+        op_match = re.search(
+            r"\s+(startsWith|endsWith|contains|matches|in)\s+|"
+            r"(<=|>=|!=|=|<|>)",
+            cond,
+        )
         if op_match:
-            op = op_match.group(0)
-            field, value = cond.split(op)
+            op = (op_match.group(1) or op_match.group(2)).strip()
+            field = cond[:op_match.start()].strip()
+            value = cond[op_match.end():].strip()
             field = field.strip()
-            value = value.strip()
-            if re.match(r"^\d+(\.\d+)?$", value):
-                value = float(value) if "." in value else int(value)
-            conditions.append({"field": field, "op": op, "value": value})
-    return {"and": conditions} if conditions else None
+            conditions.append(
+                {"field": field, "op": op, "value": parse_literal(value)}
+            )
+    if not conditions:
+        raise ValueError(f"Invalid predicate: {filter_str}")
+    return conditions[0]
 
 
 def create_dataset(cmd: str):
@@ -171,12 +214,33 @@ def select(cmd: str):
     """
     users({id=1, age>20})
     """
-    match = re.match(r"(\w+)\((.*)\)", cmd)
+    match = re.fullmatch(r"(\w+)\((\{.*\})?\)(.*)", cmd.strip(), re.S)
     if not match:
         raise ValueError("Invalid select syntax")
-    dataset, filter_str = match.groups()
+    dataset, filter_str, methods = match.groups()
     filter_obj = parse_filters(filter_str)
-    return {"action": "select", "dataset": dataset, "filter": filter_obj}
+    query = {"action": "select", "dataset": dataset, "filter": filter_obj}
+    while methods:
+        method = re.match(r"^\s*\.\s*(\w*)\(([^()]*)\)(.*)$", methods, re.S)
+        if not method:
+            raise ValueError(f"Invalid selection method chain: {methods}")
+        name, args, methods = method.groups()
+        args = args.strip()
+        if name == "":
+            query["select"] = [field.strip() for field in args.split(",") if field.strip()]
+        elif name == "order":
+            order = args.rsplit(maxsplit=1)
+            direction = order[1].lower() if len(order) == 2 else "asc"
+            if direction not in ("asc", "desc"):
+                order, direction = [args], "asc"
+            query.setdefault("order_by", []).append(
+                {"field": order[0], "direction": direction}
+            )
+        elif name in ("limit", "offset"):
+            query[name] = int(args)
+        else:
+            raise ValueError(f"Unsupported selection method '{name}'")
+    return query
 
 
 def add(cmd: str):
@@ -223,7 +287,7 @@ def execute_cli_command(engine: NeoDBEngine, cmd: str, transaction_space=None):
     Returns:
         list: Query results or None.
     """
-    if cmd.lower().strip() == "start transaction":
+    if cmd.lower().strip() in ("begin", "start transaction"):
         transaction_id = str(uuid.uuid4())
         if isinstance(transaction_space, dict):
             if transaction_space["active"] != "":
@@ -257,9 +321,7 @@ def execute_cli_command(engine: NeoDBEngine, cmd: str, transaction_space=None):
                 engine,
                 {
                     "action": "batch",
-                    "queries": [
-                        q for q in transaction_space[transaction_id].values()
-                    ],
+                    "queries": list(transaction_space[transaction_id]),
                 }
             )
             del transaction_space[transaction_id]
@@ -279,7 +341,7 @@ def execute_cli_command(engine: NeoDBEngine, cmd: str, transaction_space=None):
     json_query = parse_cli_command(cmd)
     if not json_query:
         return None
-    if transaction_space["active"] != "":
+    if transaction_space and transaction_space["active"] != "":
         transaction_space[transaction_space["active"]].append(json_query)
         return None
     return run(engine, json_query)

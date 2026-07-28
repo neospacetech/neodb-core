@@ -26,7 +26,12 @@ class KVSDataset(BaseDataset):
         self.set(obj['key'], obj['value'])
 
     def query(self, neoql):
-        if neoql.get("action") != "select":
+        action = neoql.get("action")
+        if action == "insert":
+            for obj in neoql["objects"]:
+                self.insert(obj)
+            return {"status": "success", "inserted": len(neoql["objects"])}
+        if action != "select":
             raise NotImplementedError(
                 "Only 'select' action is supported in query"
             )
@@ -56,5 +61,4 @@ class KVSDataset(BaseDataset):
         else:
             result = result[offset:]
         return result
-
 

@@ -23,15 +23,16 @@ class NeoDBEngine:
         Returns:
             Dataset: The created dataset object.
         """
+        if name in self.datasets:
+            raise ValueError(f"Dataset '{name}' already exists")
         if dtype == "graph":
             self.datasets[name] = GraphDataset(name)
         elif dtype == "table":
-            self.datasets[name] = TableDataset(columns=[])
-        elif dtype == "kvs":
+            self.datasets[name] = TableDataset(name=name, schema=schema)
+        elif dtype in ("kv", "kvs"):
             self.datasets[name] = KVSDataset()
-            
-        print(f"Dataset '{name}' of type '{dtype}' created.")
-        print(f"Current datasets: {list(self.datasets.keys())}")
+        else:
+            raise ValueError(f"Unsupported dataset type '{dtype}'")
 
         return self.datasets[name]
 
