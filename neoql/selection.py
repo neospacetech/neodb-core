@@ -77,6 +77,13 @@ class TraversalPlan:
     depth: int
 
 
+@dataclass(frozen=True, slots=True)
+class IndexLookupPlan:
+    field: str
+    value: Any
+    predicate: Mapping[str, Any]
+
+
 PlanNode: TypeAlias = (
     FilterPlan
     | ProjectionPlan
@@ -90,6 +97,7 @@ PlanNode: TypeAlias = (
     | AlgebraPlan
     | SimilarityPlan
     | TraversalPlan
+    | IndexLookupPlan
 )
 
 
@@ -287,12 +295,24 @@ class Selection:
             )
         return self._append(LimitPlan(count))
 
-    def consume(self) -> list[dict[str, Any]]:
+    def consume(self, *, optimize: bool = True) -> list[dict[str, Any]]:
         """Execute the plan and return detached result records."""
-        self._source._validate_selection(self)
-        result = [dict(record) for record in self._source._selection_records()]
-        for node in self._plan:
+        optimized = self.optimized() if optimize else self
+        self._source._validate_selection(optimized)
+        plan = optimized.plan
+        if plan and isinstance(plan[0], IndexLookupPlan):
+            result = [dict(record) for record in self._source._index_lookup(plan[0])]
+            plan = plan[1:]
+        else:
+            result = [dict(record) for record in self._source._selection_records()]
+        for node in plan:
             if isinstance(node, FilterPlan):
+                result = [
+                    record
+                    for record in result
+                    if evaluate_predicate(record, node.predicate)
+                ]
+            elif isinstance(node, IndexLookupPlan):
                 result = [
                     record
                     for record in result
@@ -335,6 +355,19 @@ class Selection:
             else:
                 result = self._apply_algebra(result, node)
         return result
+
+    def optimized(self) -> "Selection":
+        from .optimizer import optimize_plan
+
+        return Selection(
+            self._source, optimize_plan(self._plan, self._source).optimized
+        )
+
+    def explain(self) -> dict[str, Any]:
+        from .optimizer import optimize_plan
+
+        result = optimize_plan(self._plan, self._source)
+        return {"dataset": self.dataset, **result.to_dict()}
 
     def _append(self, node: PlanNode) -> "Selection":
         return Selection(self._source, (*self._plan, node))

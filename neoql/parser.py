@@ -687,6 +687,15 @@ def statement_to_query(statement: Statement) -> dict[str, Any]:
                     else 1
                 ),
             }
+        elif operation.name == "explain":
+            if operation.arguments:
+                raise NeoQLSyntaxError(
+                    "explain() does not accept arguments",
+                    operation.span,
+                    "",
+                )
+            query["explain"] = True
+            aggregated = True
         elif operation.name == "group":
             if (
                 grouping

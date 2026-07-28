@@ -669,6 +669,19 @@ NeoDB may reorder operations while preserving semantics, including:
 - Join elimination
 - Graph and vector pruning
 
+Selections are optimized automatically at consumption. `explain()` returns
+the logical and optimized plans plus the names of applied rules without
+scanning the dataset:
+
+```neoql
+users({email="a@example.com"}).limit(1).explain()
+```
+
+The public Python API also exposes `selection.optimized()` and
+`selection.explain()`. Indexed equality predicates use the dataset
+`_index_lookup` hook; storage engines can replace the fallback scan without
+changing Selection semantics.
+
 ## 30. Error handling
 
 Compile-time errors include unknown datasets or fields, type mismatches, and

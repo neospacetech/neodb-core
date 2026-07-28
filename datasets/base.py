@@ -52,8 +52,17 @@ class BaseDataset(ABC):
             depth=depth,
         )
 
+    def _index_lookup(self, plan: Any) -> list[Mapping[str, Any]]:
+        return [
+            record
+            for record in self._selection_records()
+            if evaluate_predicate(record, plan.predicate)
+        ]
+
     def _select(self, neoql: Mapping[str, Any]) -> Any:
         result: Any = Selection.from_query(self, neoql)
+        if neoql.get("explain"):
+            return result.explain()
         group_field = neoql.get("group_by")
         if group_field is not None:
             result = result.group(group_field)

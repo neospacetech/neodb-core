@@ -8,6 +8,7 @@ from neoql.selection import (
     ExpandPlan,
     FilterPlan,
     FlattenPlan,
+    IndexLookupPlan,
     OrderPlan,
     ProjectionPlan,
     Selection,
@@ -102,7 +103,7 @@ class TableDataset(BaseDataset):
     def _validate_selection(self, selection: Selection) -> None:
         computed_fields: set[str] = set()
         for node in selection.plan:
-            if isinstance(node, FilterPlan):
+            if isinstance(node, (FilterPlan, IndexLookupPlan)):
                 validate_predicate(node.predicate, self.schema)
             elif isinstance(node, ProjectionPlan):
                 self._validate_query_fields(
