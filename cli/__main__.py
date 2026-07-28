@@ -12,6 +12,7 @@ from neoql.ast import (
     CreateDatasetStatement,
     SelectionStatement,
 )
+from neoql.errors import DiagnosticError
 from neoql.parser import (
     parse_statement,
     statement_to_query,
@@ -142,6 +143,12 @@ def parse_cli_command(cmd: str):
     return statement_to_query(parse_statement(cmd))
 
 
+def print_diagnostic(error: DiagnosticError) -> None:
+    """Render a public diagnostic for humans and JSON consumers."""
+    print(f"Error [{error.code}]: {error}")
+    print(json.dumps(error.to_dict(), sort_keys=True, default=str))
+
+
 def execute_cli_command(engine: NeoDBEngine, cmd: str, transaction_space=None):
     """Execute a CLI command using the provided NeoDB engine.
 
@@ -202,7 +209,11 @@ def execute_cli_command(engine: NeoDBEngine, cmd: str, transaction_space=None):
             print(f"Transaction {transaction_id} aborted.")
             return transaction_id
 
-    json_query = parse_cli_command(cmd)
+    try:
+        json_query = parse_cli_command(cmd)
+    except DiagnosticError as error:
+        print_diagnostic(error)
+        return None
     if not json_query:
         return None
     if transaction_space and transaction_space["active"] != "":
@@ -225,8 +236,11 @@ def run(engine: NeoDBEngine, json_query):
         print("Executing query:")
         print(json.dumps(json_query, indent=2))
         return engine.execute_query(json_query)
-    except Exception as e:
-        print(f"Error executing query: {e}")
+    except DiagnosticError as error:
+        print_diagnostic(error)
+        return None
+    except Exception as error:
+        print(f"Error executing query: {error}")
         return None
 
 

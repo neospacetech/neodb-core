@@ -540,6 +540,30 @@ Compile-time errors include unknown datasets or fields, type mismatches, and
 invalid traversals. Runtime errors include constraint violations, permission
 denials, deadlocks, timeouts, and missing references.
 
+All public diagnostics inherit from `DiagnosticError` and expose `to_dict()`.
+The stable payload includes `error`, `code`, `message`, `phase`, `retryable`,
+and `details`. Compile-time diagnostics also include a half-open `location`
+with offsets and one-based line and column positions. The CLI prints a concise
+`Error [code]: message` line followed by the same payload as JSON.
+
+| Code | Phase | Meaning |
+| --- | --- | --- |
+| `syntax_error` | parse | Invalid NeoQL syntax |
+| `type_mismatch` | compile | Invalid type declaration, inference, or cast |
+| `invalid_schema` | compile | Invalid field or constraint declaration |
+| `unknown_dataset` | plan | Dataset cannot be resolved |
+| `unknown_field` | plan/runtime | Field cannot be resolved |
+| `invalid_traversal` | plan | Traversal cannot be planned |
+| `missing_reference` | runtime | Referenced record does not exist |
+| `permission_denied` | runtime | Operation is not authorized |
+| `timeout` | runtime | Query exceeded its deadline; retryable |
+| `deadlock` | runtime | Transaction was aborted; retryable |
+
+Constraint and predicate diagnostics use more specific stable codes such as
+`required`, `unique`, `readonly`, `null`, `unknown_operator`,
+`invalid_operand`, and `invalid_pattern`. Callers should branch on `code` and
+treat the human-readable `message` as display text.
+
 ## 30. Language goals
 
 NeoQL should be:

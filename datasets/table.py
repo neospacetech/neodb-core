@@ -1,6 +1,7 @@
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from typing import Any, cast
 
+from neoql.errors import UnknownFieldError
 from neoql.predicates import validate_predicate
 from neoql.schema import DatasetSchema
 
@@ -76,11 +77,13 @@ class TableDataset(BaseDataset):
             result = [row for row in result if self._apply_filter(row, filter_obj)]
         select_fields = neoql.get("select")
         if select_fields:
+            self._validate_query_fields(select_fields)
             result = [
                 {field: row.get(field) for field in select_fields} for row in result
             ]
         order_by = neoql.get("order_by")
         if order_by:
+            self._validate_query_fields(order["field"] for order in order_by)
             for order in reversed(order_by):
                 field = order["field"]
                 result.sort(
@@ -94,6 +97,11 @@ class TableDataset(BaseDataset):
         else:
             result = result[offset:]
         return result
+
+    def _validate_query_fields(self, fields: Iterable[str]) -> None:
+        for field in fields:
+            if field not in self.schema.fields:
+                raise UnknownFieldError(self.name, field)
 
     def delete(self, where):
         self.rows = [row for row in self.rows if not where(row)]

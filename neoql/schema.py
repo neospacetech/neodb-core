@@ -5,6 +5,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
+from .errors import DiagnosticError
 from .types import (
     NeoQLTypeError,
     TypeDescriptor,
@@ -28,24 +29,21 @@ SUPPORTED_CONSTRAINTS = frozenset(
 _MISSING = object()
 
 
-class SchemaDefinitionError(ValueError):
+class SchemaDefinitionError(DiagnosticError):
     """A malformed or internally inconsistent dataset schema."""
 
     def __init__(self, message: str, *, field: str | None = None):
-        self.code = "invalid_schema"
         self.field = field
-        super().__init__(message)
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "error": "schema_definition",
-            "code": self.code,
-            "field": self.field,
-            "message": str(self),
-        }
+        super().__init__(
+            "invalid_schema",
+            message,
+            category="schema_definition",
+            phase="compile",
+            details={"field": field} if field is not None else {},
+        )
 
 
-class ConstraintViolation(ValueError):
+class ConstraintViolation(DiagnosticError):
     """A machine-readable record constraint failure."""
 
     def __init__(
@@ -62,18 +60,24 @@ class ConstraintViolation(ValueError):
         self.dataset = dataset
         self.field = field
         self.value = value
-        self.details = dict(details or {})
-        super().__init__(message)
+        diagnostic_details = dict(details or {})
+        diagnostic_details["dataset"] = dataset
+        if field is not None:
+            diagnostic_details["field"] = field
+        if self.value is not _MISSING:
+            diagnostic_details["value"] = self.value
+        super().__init__(
+            code,
+            message,
+            category="constraint_violation",
+            phase="runtime",
+            details=diagnostic_details,
+        )
 
     def to_dict(self) -> dict[str, Any]:
-        payload = {
-            "error": "constraint_violation",
-            "code": self.code,
-            "dataset": self.dataset,
-            "field": self.field,
-            "message": str(self),
-            "details": self.details,
-        }
+        payload = super().to_dict()
+        payload["dataset"] = self.dataset
+        payload["field"] = self.field
         if self.value is not _MISSING:
             payload["value"] = self.value
         return payload

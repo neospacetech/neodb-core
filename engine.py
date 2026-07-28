@@ -3,6 +3,11 @@
 from datasets.graph import GraphDataset
 from datasets.kvs import KVSDataset
 from datasets.table import TableDataset
+from neoql.errors import (
+    DatasetAlreadyExistsError,
+    DatasetNotFoundError,
+    UnsupportedDatasetError,
+)
 
 
 class NeoDBEngine:
@@ -23,7 +28,7 @@ class NeoDBEngine:
             Dataset: The created dataset object.
         """
         if name in self.datasets:
-            raise ValueError(f"Dataset '{name}' already exists")
+            raise DatasetAlreadyExistsError(name)
         if dtype == "graph":
             self.datasets[name] = GraphDataset(name)
         elif dtype == "table":
@@ -31,7 +36,7 @@ class NeoDBEngine:
         elif dtype in ("kv", "kvs"):
             self.datasets[name] = KVSDataset()
         else:
-            raise ValueError(f"Unsupported dataset type '{dtype}'")
+            raise UnsupportedDatasetError(dtype)
 
         return self.datasets[name]
 
@@ -60,5 +65,5 @@ class NeoDBEngine:
 
         dataset = self.datasets.get(query["dataset"])
         if not dataset:
-            raise ValueError(f"Dataset '{query['dataset']}' not found")
+            raise DatasetNotFoundError(query["dataset"])
         return dataset.query(query)

@@ -10,11 +10,20 @@ from typing import Any, TypeAlias
 from uuid import UUID
 
 from .ast import CreateDatasetStatement, Literal, TypeRef
+from .errors import DiagnosticError
 from .parser import parse_statement
 
 
-class NeoQLTypeError(ValueError):
+class NeoQLTypeError(DiagnosticError):
     """Raised when a NeoQL type or cast is invalid."""
+
+    def __init__(self, message: str, *, code: str = "type_mismatch"):
+        super().__init__(
+            code,
+            message,
+            category="type",
+            phase="compile",
+        )
 
 
 class TypeKind(str, Enum):

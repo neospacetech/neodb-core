@@ -406,16 +406,20 @@ def _record_to_dict(record: RecordLiteral) -> dict[str, Any]:
 def statement_to_query(statement: Statement) -> dict[str, Any]:
     """Adapt an AST statement to the current engine query contract."""
     if isinstance(statement, CreateDatasetStatement):
-        from .schema import SchemaDefinitionError
-        from .types import resolve_type
+        from .schema import DatasetSchema, SchemaDefinitionError
+        from .types import NeoQLTypeError, resolve_type
 
         schema = {}
         for field in statement.fields:
             if field.name in schema:
                 raise SchemaDefinitionError(
                     f"Duplicate field '{field.name}'", field=field.name
-                )
-            entry: dict[str, Any] = {"type": resolve_type(field.type_ref).display()}
+                ).with_source(field.span)
+            try:
+                resolved_type = resolve_type(field.type_ref)
+            except NeoQLTypeError as error:
+                raise error.with_source(field.type_ref.span) from error
+            entry: dict[str, Any] = {"type": resolved_type.display()}
             if field.constraints:
                 constraints: list[str | dict[str, Any]] = []
                 for constraint in field.constraints:
@@ -433,6 +437,16 @@ def statement_to_query(statement: Statement) -> dict[str, Any]:
                         constraints.append(constraint.name)
                 entry["constraints"] = constraints
             schema[field.name] = entry
+        try:
+            DatasetSchema.from_mapping(statement.name, schema)
+        except SchemaDefinitionError as error:
+            matching = next(
+                (field for field in statement.fields if field.name == error.field),
+                None,
+            )
+            raise error.with_source(
+                matching.span if matching is not None else statement.span
+            ) from error
         query: dict[str, Any] = {
             "action": "create_dataset",
             "name": statement.name,

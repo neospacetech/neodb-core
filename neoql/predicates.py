@@ -5,6 +5,7 @@ from collections.abc import Mapping, Sequence, Set
 from decimal import Decimal
 from typing import Any
 
+from .errors import DiagnosticError
 from .schema import DatasetSchema
 from .types import (
     NeoQLTypeError,
@@ -37,7 +38,7 @@ _ORDERABLE_TYPE_KINDS = frozenset(
 )
 
 
-class PredicateEvaluationError(ValueError):
+class PredicateEvaluationError(DiagnosticError):
     """A structured predicate validation or evaluation failure."""
 
     def __init__(
@@ -55,18 +56,35 @@ class PredicateEvaluationError(ValueError):
         self.operator = operator
         self.expected = expected
         self.actual = actual
-        super().__init__(message)
+        details = {
+            key: value
+            for key, value in {
+                "field": field,
+                "operator": operator,
+                "expected": expected,
+                "actual": actual,
+            }.items()
+            if value is not None
+        }
+        super().__init__(
+            code,
+            message,
+            category="predicate",
+            phase="plan",
+            details=details,
+        )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "error": "predicate",
-            "code": self.code,
-            "field": self.field,
-            "operator": self.operator,
-            "expected": self.expected,
-            "actual": self.actual,
-            "message": str(self),
-        }
+        payload = super().to_dict()
+        payload.update(
+            {
+                "field": self.field,
+                "operator": self.operator,
+                "expected": self.expected,
+                "actual": self.actual,
+            }
+        )
+        return payload
 
 
 def evaluate_predicate(
